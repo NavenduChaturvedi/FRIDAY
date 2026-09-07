@@ -91,6 +91,12 @@ class Config:
     ollama_timeout: float = field(
         default_factory=lambda: _env_float("FRIDAY_OLLAMA_TIMEOUT", 150.0)
     )
+    # How long Ollama keeps a model in RAM after use. On a laptop, before
+    # loading a heavy model (complex/code) FRIDAY unloads the *other* heavy
+    # one — so at most the chat model plus one heavy model are ever resident.
+    ollama_keep_alive: str = field(
+        default_factory=lambda: _env_str("FRIDAY_OLLAMA_KEEP_ALIVE", "10m")
+    )
 
     def gemini_model_for(self, route: str) -> str:
         heavy = self.gemini_model_heavy or self.gemini_model

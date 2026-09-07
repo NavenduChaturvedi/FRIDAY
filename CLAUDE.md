@@ -100,8 +100,15 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
 - **CODE requests are sent without tool declarations** (`Brain.ask`). A coding
-  question rarely needs weather/timers, and 17 tool schemas bloat the prompt —
+  question rarely needs weather/timers, and 18 tool schemas bloat the prompt —
   which the 14b code model is slowest to process on CPU.
+- **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
+  `qwen3.5:4b` (chat, 3 GB) stays resident; before loading `gemma4` or
+  `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`
+  unloads the *other* heavy model via `generate(keep_alive=0)`. So at most
+  chat + one heavy (~13 GB) are ever loaded. It only unloads models FRIDAY
+  routes to — never anything else you have running. `FRIDAY_OLLAMA_KEEP_ALIVE`
+  (10m) controls lingering.
 - **History is a `deque(maxlen=history_turns*2)`** of `Turn(role, content)`,
   in memory only, cleared on restart or `Brain.reset()`.
 - **Persistent memory (`friday/memory.py`).** `state/memory.json`, categorised
