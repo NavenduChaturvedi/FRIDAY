@@ -31,14 +31,40 @@ def run(timezone: str = "") -> str:
 - Need to speak later (a timer, a reminder)? Add `notify` to your signature:
   `def run(seconds: int, notify=None)`. You get a `Callable[[str], None]`;
   whatever you pass it is spoken at the start of the next turn.
+- Need to run something from startup (a background checker), not just when
+  called? Define `on_load(notify)` at module level — it's called once at
+  launch for enabled tools. `set_reminder.py` uses this.
 
 ## Bundled
 
+**Answers & lookups**
 | Tool | What it does |
 |---|---|
 | `get_time` | current time, local or any IANA timezone |
-| `set_timer` | countdown timer; announces itself when it fires |
-| `web_search` | DuckDuckGo search, returns snippets for the model to summarise |
+| `calculate` | safe arithmetic — sums, percentages, `sqrt`/`sin`/`log`/… |
+| `get_weather` | current conditions + today's range for a city (Open-Meteo) |
+| `web_search` | DuckDuckGo search, returns snippets to summarise |
+| `get_news` | recent headlines, optionally about a topic |
+| `wikipedia_lookup` | short factual summary of a topic |
+| `define_word` | word definitions (Wiktionary) |
+
+**Doing things**
+| Tool | What it does |
+|---|---|
+| `set_timer` | countdown; announces itself when it fires (not saved) |
+| `reminder` | time-based reminder; **survives restart**, checked in the background |
+| `notes` | persistent scratchpad — add / list / remove / clear |
+| `open_url` | open a web page in the default browser |
+| `launch_app` | open a desktop app by name |
+| `clipboard` | read or set the system clipboard |
+| `random_choice` | coin / dice / random number / pick from a list |
+
+**The machine & files**
+| Tool | What it does |
+|---|---|
+| `system_status` | CPU, memory, disk, battery |
+| `read_file` | read a local text file so FRIDAY can answer about it |
+| `find_files` | search for files by name under a folder |
 
 ## Enabling / disabling
 
@@ -47,7 +73,15 @@ All tools in this directory are on by default. To run a subset, set
 
 ## Notes
 
-- A timer fires on schedule but is only *spoken* on FRIDAY's next turn (when
-  you next talk to her). Timers don't survive a restart.
-- `web_search` needs the `ddgs` package (in `requirements.txt`); `get_time`
-  needs `tzdata` on Windows.
+- Timers and reminders fire on schedule but are only *spoken* on FRIDAY's
+  next turn (when you next talk to her).
+- `set_timer` is in-process and gone on restart; `reminder` is written to
+  `state/` and survives.
+- Every acting tool here is reversible or low-stakes (open an app, set the
+  clipboard, write a note). A real confirmation gate for irreversible actions
+  is still on the roadmap — don't add a tool that deletes or sends without
+  one.
+- Extra packages some tools need (all in `requirements.txt`): `ddgs`
+  (`web_search`, `get_news`), `tzdata` (`get_time` on Windows), `psutil`
+  (`system_status`), `pyperclip` (`clipboard`), `dateparser` (`reminder`).
+  A missing package disables just that tool, with a spoken note.

@@ -94,6 +94,10 @@ class Config:
     max_tool_iterations: int = field(
         default_factory=lambda: _env_int("FRIDAY_MAX_TOOL_ITERATIONS", 4)
     )
+    # Where tools keep local state (notes, reminders).
+    state_dir: str = field(
+        default_factory=lambda: _env_str("FRIDAY_STATE_DIR", "state")
+    )
 
     # --- Persona -------------------------------------------------------
     persona_name: str = field(
@@ -145,6 +149,13 @@ class Config:
     def tools_path(self) -> Path:
         p = Path(self.tools_dir)
         return p if p.is_absolute() else REPO_ROOT / p
+
+    @property
+    def state_path(self) -> Path:
+        p = Path(self.state_dir)
+        p = p if p.is_absolute() else REPO_ROOT / p
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     @property
     def piper_voice_path(self) -> Path:

@@ -23,8 +23,11 @@ google-genai==2.22.0     # Gemini API — needs GEMINI_API_KEY in .env
 ollama==0.6.2            # talks to a local Ollama server (OLLAMA_HOST)
 
 # --- Tools ---
-ddgs==9.16.0             # web_search tool (DuckDuckGo)
-tzdata==2026.3           # IANA timezone db for the clock tool (Windows has none)
+ddgs==9.16.0             # web_search / news tools (DuckDuckGo)
+tzdata==2026.3           # IANA timezone db for get_time (Windows has none)
+psutil==7.2.2            # system_status tool
+pyperclip==1.11.0        # clipboard tool
+dateparser==1.4.3        # reminder tool — parses "in 20 minutes", "tomorrow 8am"
 
 # --- Config ---
 python-dotenv==1.2.3

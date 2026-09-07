@@ -23,6 +23,10 @@ signature by name. A tool may also declare ``notify`` in its signature to get
 a ``Callable[[str], None]`` it can call to have FRIDAY say something later
 (e.g. a timer going off) — the message is queued and spoken by the main loop.
 
+A tool module may define ``on_load(notify)`` — called once at startup (for
+enabled tools only). Use it to start a background checker, e.g. for reminders
+that need to fire without the tool being called first.
+
 Discovery happens once at startup. A file that fails to import, or is missing
 ``TOOL``/``run``, is skipped with a logged reason — it never breaks the others.
 """
@@ -50,6 +54,7 @@ class Tool:
     parameters: dict
     run: Callable
     source: str
+    module: object = None
 
     def declaration(self) -> dict:
         """Provider-neutral JSON-Schema declaration."""
@@ -85,6 +90,12 @@ class Toolbox:
             if self._enabled is not None and tool.name not in self._enabled:
                 continue
             self._tools[tool.name] = tool
+            on_load = getattr(tool.module, "on_load", None)
+            if callable(on_load):
+                try:
+                    on_load(self.notifications.put)
+                except Exception as exc:  # noqa: BLE001 — a bad hook mustn't sink startup
+                    self._skipped.append(f"{tool.source} on_load: {exc}")
 
     def _load_one(self, path: Path) -> Tool:
         spec = importlib.util.spec_from_file_location(f"friday_tool_{path.stem}", path)
@@ -109,6 +120,7 @@ class Toolbox:
             parameters=params,
             run=run,
             source=path.name,
+            module=module,
         )
 
     # -- accessors -------------------------------------------------------

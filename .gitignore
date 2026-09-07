@@ -15,3 +15,6 @@ user_input.wav
 friday_response.wav
 test_recording.wav
 test_voice.wav
+
+# Tool state (notes, reminders)
+state/

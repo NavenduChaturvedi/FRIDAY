@@ -39,7 +39,9 @@ friday/
   toolbox.py            discovers tools/*.py, dispatches calls, queues notifications
   voice.py              Ears (mic capture + faster-whisper), Mouth (Piper + playback)
   text.py               clean_text_for_speech — strips markdown/emoji for TTS
-tools/                   one .py per tool (get_time, set_timer, web_search) + _template.py
+tools/                   one .py per tool (~17: get_time, calculate, get_weather,
+                         web_search, reminder, notes, system_status, …) + _template.py
+state/                   tool state (notes, reminders) — gitignored
 personas/friday/         SOUL.md / MEMORY.md / USER.md — editable personality
 requirements.txt         direct deps, exact pins
 requirements.lock        full transitive lock (pip freeze)
@@ -100,10 +102,17 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   provider-neutral JSON Schema, translated per provider in `brain.py`
   (`parameters_json_schema` for Gemini, `{"type":"function",...}` for Ollama).
   Each provider runs its own tool loop, capped at `FRIDAY_MAX_TOOL_ITERATIONS`.
-  A tool can take `notify` in its signature to speak later (timer); the
-  message is queued on `Toolbox.notifications` and the main loop drains it at
-  the top of the next turn — so a timer is only *heard* when you next speak
-  to her. See `tools/README.md`.
+  A tool can take `notify` in its signature to speak later (timer/reminder);
+  the message is queued on `Toolbox.notifications` and the main loop drains it
+  at the top of the next turn — so it's only *heard* when you next speak to
+  her. A tool module can also define `on_load(notify)`, run once at startup
+  for a background checker (`set_reminder` does this). Tools that persist
+  state write to `Config.state_path` (`state/`, gitignored). See
+  `tools/README.md`.
+- **Gemini free tier is stingy** — ~5 req/min and ~20 req/day on the flash
+  model. Heavy testing exhausts it and everything falls to Ollama (which is
+  the whole point of the chain, and it works). For real use, a paid key or a
+  capable local model.
 - **Whisper model size** is `tiny` by default (`FRIDAY_WHISPER_MODEL`).
   Bigger = more accurate, slower, more RAM. First run downloads it from
   Hugging Face and caches it.
