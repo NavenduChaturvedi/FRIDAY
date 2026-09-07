@@ -21,11 +21,24 @@ from collections import deque
 from dataclasses import dataclass
 
 from .config import Config
+from .memory import MemoryStore
 from .persona import load_system_prompt
 from .router import Route, classify
 from .toolbox import Toolbox
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+# "Friday, remember that I'm vegetarian" — a direct instruction to store a
+# fact. Small models don't reliably turn this into a memory tool call, and
+# it's too important to leave to chance, so it's handled before the LLM.
+# "remember to <do X>" is deliberately excluded — that's a reminder/task.
+_REMEMBER = re.compile(
+    r"^(?:friday[,\s]+)?(?:please\s+)?"
+    r"(?:remember|note|don'?t\s+forget)\s+"
+    r"(?:that\s+|this(?:\s+about\s+me)?[:,]?\s*)?"
+    r"(?P<fact>(?!to\s)[^.].*)$",
+    re.IGNORECASE,
+)
 
 
 class BrainError(RuntimeError):
@@ -247,7 +260,8 @@ class Brain:
     def __init__(self, cfg: Config, toolbox: Toolbox | None = None) -> None:
         self._cfg = cfg
         self._toolbox = toolbox
-        self._system = load_system_prompt(cfg.persona_name)
+        self._base_system = load_system_prompt(cfg.persona_name)
+        self._memory = MemoryStore(cfg.memory_path)
         self._history: deque[Turn] = deque(maxlen=max(cfg.history_turns, 0) * 2)
 
         self._providers: list[Provider] = []
@@ -268,20 +282,41 @@ class Brain:
                 "pulled, or set GEMINI_API_KEY in .env."
             )
         tools = f", {len(toolbox)} tools" if toolbox and len(toolbox) else ""
-        print(f"  brain: {' -> '.join(p.name for p in self._providers)}{tools}")
+        mem = "" if self._memory.is_empty() else f", {len(self._memory.all_entries())} memories"
+        print(f"  brain: {' -> '.join(p.name for p in self._providers)}{tools}{mem}")
+
+    @property
+    def memory(self) -> MemoryStore:
+        return self._memory
+
+    def _system(self) -> str:
+        core = self._memory.core_block(self._cfg.memory_core_chars)
+        if not core:
+            return self._base_system
+        return (
+            f"{self._base_system}\n\n---\n\n"
+            f"## What you remember about the user\n\n{core}\n\n"
+            "If they ask you to remember, forget, or recall something, use the "
+            "`memory` tool."
+        )
 
     def ask(self, user_text: str) -> str:
+        shortcut = self._try_remember_shortcut(user_text)
+        if shortcut is not None:
+            return shortcut
+
         route = classify(user_text)
         # A coding request rarely needs weather/timers/search, and the tool
         # schemas bloat the prompt — which the big code model is slowest to
         # chew through. Skip tools for CODE.
         toolbox = None if route is Route.CODE else self._toolbox
+        system = self._system()
         history = list(self._history)
         errors: list[str] = []
         for provider in self._providers:
             try:
                 reply = provider.generate(
-                    self._system, history, user_text, toolbox, route
+                    system, history, user_text, toolbox, route
                 )
             except Exception as exc:  # noqa: BLE001 — fall through to next provider
                 errors.append(f"{provider.name}: {exc}")
@@ -297,3 +332,16 @@ class Brain:
 
     def reset(self) -> None:
         self._history.clear()
+
+    def _try_remember_shortcut(self, user_text: str) -> str | None:
+        m = _REMEMBER.match(user_text.strip())
+        if not m:
+            return None
+        fact = m.group("fact").strip().rstrip(".").strip()
+        if len(fact) < 3:
+            return None
+        self._memory.add(fact, "misc")
+        reply = "Got it. That's in memory now."
+        self._history.append(Turn("user", user_text))
+        self._history.append(Turn("assistant", reply))
+        return reply

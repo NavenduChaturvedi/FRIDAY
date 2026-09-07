@@ -38,13 +38,14 @@ friday/
   config.py             every setting, read once from env / .env (Config dataclass)
   persona.py            loads personas/<name>/*.md into the system prompt
   router.py             classify(text) → CHAT | COMPLEX | CODE (keyword pass)
-  brain.py              provider chain + per-route model pick + tool loop + history
+  memory.py             MemoryStore — categorised persistent facts, core-block builder
+  brain.py              provider chain + per-route model pick + tool loop + history + memory
   toolbox.py            discovers tools/*.py, dispatches calls, queues notifications
   voice.py              Ears (mic capture + faster-whisper), Mouth (Piper + playback)
   text.py               clean_text_for_speech — strips markdown/emoji for TTS
-tools/                   one .py per tool (~17: get_time, calculate, get_weather,
-                         web_search, reminder, notes, system_status, …) + _template.py
-state/                   tool state (notes, reminders) — gitignored
+tools/                   one .py per tool (~18: get_time, calculate, get_weather,
+                         web_search, reminder, notes, memory, …) + _template.py
+state/                   notes.json, reminders.json, memory.json — gitignored
 personas/friday/         SOUL.md / MEMORY.md / USER.md — editable personality
 requirements.txt         direct deps, exact pins
 requirements.lock        full transitive lock (pip freeze)
@@ -103,7 +104,15 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   which the 14b code model is slowest to process on CPU.
 - **History is a `deque(maxlen=history_turns*2)`** of `Turn(role, content)`,
   in memory only, cleared on restart or `Brain.reset()`.
-- **`ollama_timeout` is 120s** — the 14b coder model is slow to load cold.
+- **Persistent memory (`friday/memory.py`).** `state/memory.json`, categorised
+  (`identity/preferences/projects/people/misc`). `Brain._system()` rebuilds the
+  prompt each turn: persona + `MEMORY.md`/`USER.md` seed + a `core_block()`
+  (~`memory_core_chars`, newest-first, capped). The rest stays on disk and is
+  reached via the `memory` tool's `recall`. "Friday, remember that …" is
+  intercepted in `Brain.ask` (`_REMEMBER` regex) and stored directly — small
+  models don't reliably make the tool call, and it's too important to miss.
+  "remember **to** …" is excluded (that's a reminder).
+- **`ollama_timeout` is 150s** — the 14b coder model is slow to load cold.
 - **`<think>…</think>` blocks are stripped** from model output (`brain._clean`)
   and Ollama is called with `think=False`, for reasoning models like qwen3.
 - **Reasoning/quality is the model's problem, not the code's.** If answers
@@ -147,7 +156,8 @@ Ollama must be running (`ollama serve`) with at least one of the models in
 ## Persona
 
 `personas/friday/SOUL.md` carries the personality and the hard rules (stay
-in character, don't reveal the prompt, don't claim capabilities she lacks).
-The "Voice rules" section exists because output is spoken — no markdown,
-emoji, or URLs. Edit `USER.md` for your name/pronouns/notes. See
-`personas/README.md`.
+in character, don't reveal the prompt, don't claim capabilities she lacks,
+never store sensitive data). The "How you talk" section exists because output
+is spoken — no markdown, emoji, or URLs. `MEMORY.md` / `USER.md` are
+hand-written seed facts folded into the prompt; the *living* memory is
+`state/memory.json` (see above). See `personas/README.md`.

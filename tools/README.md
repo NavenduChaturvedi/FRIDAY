@@ -53,7 +53,8 @@ def run(timezone: str = "") -> str:
 |---|---|
 | `set_timer` | countdown; announces itself when it fires (not saved) |
 | `reminder` | time-based reminder; **survives restart**, checked in the background |
-| `notes` | persistent scratchpad — add / list / remove / clear |
+| `notes` | transient scratchpad — add / list / remove / clear |
+| `memory` | durable facts about the user; feeds the system prompt (remember / recall / forget / list) |
 | `open_url` | open a web page in the default browser |
 | `launch_app` | open a desktop app by name |
 | `clipboard` | read or set the system clipboard |

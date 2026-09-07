@@ -29,6 +29,10 @@ Three files, all read on every launch:
 
 ## Memory
 
-Friday can read `MEMORY.md` but not yet write to it. To have her carry
-something across restarts, add a dated bullet by hand. In-conversation
-"remember this" is coming later.
+Two layers:
+
+- **`MEMORY.md`** (this folder) — hand-written seed facts, folded into the
+  prompt every launch. Edit it for things you want true from the first run.
+- **`state/memory.json`** — Friday's living memory. She writes to it herself
+  when you say "remember that…", and reads it with her `memory` tool. Don't
+  edit it by hand; it's gitignored (it's yours, not the repo's).

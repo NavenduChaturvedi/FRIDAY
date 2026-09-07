@@ -113,6 +113,10 @@ class Config:
     history_turns: int = field(
         default_factory=lambda: _env_int("FRIDAY_HISTORY_TURNS", 8)
     )
+    # How much of persistent memory rides in the system prompt each turn.
+    memory_core_chars: int = field(
+        default_factory=lambda: _env_int("FRIDAY_MEMORY_CORE_CHARS", 1000)
+    )
 
     # --- Tools -------------------------------------------------------
     tools_dir: str = field(
@@ -188,6 +192,10 @@ class Config:
         p = p if p.is_absolute() else REPO_ROOT / p
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def memory_path(self) -> Path:
+        return self.state_path / "memory.json"
 
     @property
     def piper_voice_path(self) -> Path:
