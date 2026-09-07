@@ -82,6 +82,19 @@ class Config:
         default_factory=lambda: _env_int("FRIDAY_HISTORY_TURNS", 8)
     )
 
+    # --- Tools -------------------------------------------------------
+    tools_dir: str = field(
+        default_factory=lambda: _env_str("FRIDAY_TOOLS_DIR", "tools")
+    )
+    # Empty -> every tool in tools_dir is enabled.
+    tools_enabled: list[str] = field(
+        default_factory=lambda: _env_list("FRIDAY_TOOLS_ENABLED", [])
+    )
+    # Safety stop on a tool-call loop that never settles.
+    max_tool_iterations: int = field(
+        default_factory=lambda: _env_int("FRIDAY_MAX_TOOL_ITERATIONS", 4)
+    )
+
     # --- Persona -------------------------------------------------------
     persona_name: str = field(
         default_factory=lambda: _env_str("FRIDAY_PERSONA", "friday")
@@ -127,6 +140,11 @@ class Config:
         "shut down friday",
         "power down friday",
     )
+
+    @property
+    def tools_path(self) -> Path:
+        p = Path(self.tools_dir)
+        return p if p.is_absolute() else REPO_ROOT / p
 
     @property
     def piper_voice_path(self) -> Path:

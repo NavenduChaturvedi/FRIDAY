@@ -22,5 +22,9 @@ google-genai==2.22.0     # Gemini API — needs GEMINI_API_KEY in .env
 # --- Brain: fallback (local) ---
 ollama==0.6.2            # talks to a local Ollama server (OLLAMA_HOST)
 
+# --- Tools ---
+ddgs==9.16.0             # web_search tool (DuckDuckGo)
+tzdata==2026.3           # IANA timezone db for the clock tool (Windows has none)
+
 # --- Config ---
 python-dotenv==1.2.3

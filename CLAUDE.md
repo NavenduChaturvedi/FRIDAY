@@ -5,8 +5,9 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 ## Project Overview
 
 F.R.I.D.A.Y. is a local, voice-driven assistant: speak to it, it transcribes
-you, asks an LLM, and speaks the answer back. It is modelled on FRIDAY from
-the Marvel films — dry, competent, informal, spoken in short lines.
+you, asks an LLM (which can call tools), and speaks the answer back. It is
+modelled on FRIDAY from the Marvel films — dry, warm, competent, spoken in
+short lines. Personal project, not production.
 
 The pipeline is strictly linear and synchronous, one turn at a time:
 
@@ -16,6 +17,8 @@ microphone ──► sounddevice InputStream (16 kHz mono)
                 └─► faster-whisper transcribe ──► user_text
                     └─► Brain.ask()  ── Gemini (cloud)  ─┐ first to answer
                         │              └ Ollama (local) ─┘ wins
+                        │   └─ tool-call loop: model → Toolbox.call() → result
+                        │      → model, up to max_tool_iterations rounds
                         └─► clean_text_for_speech()
                             └─► Piper synthesize_wav ──► friday_response.wav
                                 └─► sounddevice playback
@@ -32,17 +35,19 @@ friday.py               entrypoint + the conversational loop
 friday/
   config.py             every setting, read once from env / .env (Config dataclass)
   persona.py            loads personas/<name>/*.md into the system prompt
-  brain.py              provider chain (Gemini → Ollama) + rolling history
+  brain.py              provider chain (Gemini → Ollama) + tool loop + rolling history
+  toolbox.py            discovers tools/*.py, dispatches calls, queues notifications
   voice.py              Ears (mic capture + faster-whisper), Mouth (Piper + playback)
   text.py               clean_text_for_speech — strips markdown/emoji for TTS
+tools/                   one .py per tool (get_time, set_timer, web_search) + _template.py
 personas/friday/         SOUL.md / MEMORY.md / USER.md — editable personality
 requirements.txt         direct deps, exact pins
 requirements.lock        full transitive lock (pip freeze)
 .env.example             copy to .env; only GEMINI_API_KEY has no default
-test_brain.py            keyboard-only test of the Gemini→Ollama chain
+test_brain.py            keyboard-only test of the chain + tools
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
-*.onnx / *.onnx.json     Piper voice models (git-tracked; ~63–120 MB each)
+*.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
 *.wav                    runtime artifacts, gitignored, safe to delete
 ```
 
@@ -86,7 +91,19 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   and Ollama is called with `think=False`, for reasoning models like qwen3.
 - **Reasoning/quality is the model's problem, not the code's.** If answers
   are weak, reorder `FRIDAY_OLLAMA_MODELS` or set a Gemini key — don't add
-  parsing hacks.
+  parsing hacks. (Small local models like `qwen2.5:3b` hold the persona
+  poorly *while using tools* — they list and hedge. Gemini is fine; for the
+  fallback prefer `qwen3.5:4b` / `gemma4`.)
+- **Tools live in `tools/*.py`**, each a `TOOL` dict (name / description /
+  JSON-Schema `parameters`) + a `run(**args) -> str`. `Toolbox` discovers
+  them at startup; a bad file is skipped, not fatal. Declarations are
+  provider-neutral JSON Schema, translated per provider in `brain.py`
+  (`parameters_json_schema` for Gemini, `{"type":"function",...}` for Ollama).
+  Each provider runs its own tool loop, capped at `FRIDAY_MAX_TOOL_ITERATIONS`.
+  A tool can take `notify` in its signature to speak later (timer); the
+  message is queued on `Toolbox.notifications` and the main loop drains it at
+  the top of the next turn — so a timer is only *heard* when you next speak
+  to her. See `tools/README.md`.
 - **Whisper model size** is `tiny` by default (`FRIDAY_WHISPER_MODEL`).
   Bigger = more accurate, slower, more RAM. First run downloads it from
   Hugging Face and caches it.

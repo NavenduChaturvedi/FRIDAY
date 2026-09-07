@@ -1,15 +1,17 @@
-"""FRIDAY's brain: a provider chain with rolling conversation memory.
+"""FRIDAY's brain: a provider chain with tool use and rolling conversation memory.
 
 Order of preference:
 
-1. **Gemini** (cloud) — used when ``GEMINI_API_KEY`` is set. Fast, capable,
-   the day-to-day driver.
+1. **Gemini** (cloud) — used when ``GEMINI_API_KEY`` is set.
 2. **Ollama** (local) — the fallback. Tries each model in
    ``Config.ollama_models`` until one answers. Fully offline.
 
 ``Brain.ask()`` walks the chain: the first provider that returns a non-empty
-answer wins, and only then is the exchange written to history. If every
-provider fails it raises ``BrainError`` and the loop stays alive.
+answer wins, and only then is the exchange written to history. Each provider
+runs its own tool-call loop — if the model asks for a tool, we run it (via the
+``Toolbox``), feed the result back, and let the model continue, up to
+``Config.max_tool_iterations`` rounds. If every provider fails it raises
+``BrainError`` and the loop stays alive.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 
 from .config import Config
 from .persona import load_system_prompt
+from .toolbox import Toolbox
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 
@@ -47,7 +50,13 @@ def _clean(raw: str | None) -> str:
 class Provider:
     name = "provider"
 
-    def generate(self, system: str, history: list[Turn], user_text: str) -> str:
+    def generate(
+        self,
+        system: str,
+        history: list[Turn],
+        user_text: str,
+        toolbox: Toolbox | None,
+    ) -> str:
         raise NotImplementedError
 
 
@@ -66,7 +75,24 @@ class GeminiProvider(Provider):
         self._model = cfg.gemini_model
         self._cfg = cfg
 
-    def generate(self, system: str, history: list[Turn], user_text: str) -> str:
+    def _tools_arg(self, toolbox: Toolbox | None):
+        if not toolbox or not len(toolbox):
+            return None
+        types = self._types
+        return [
+            types.Tool(
+                function_declarations=[
+                    types.FunctionDeclaration(
+                        name=d["name"],
+                        description=d["description"],
+                        parameters_json_schema=d["parameters"],
+                    )
+                    for d in toolbox.declarations()
+                ]
+            )
+        ]
+
+    def generate(self, system, history, user_text, toolbox):
         types = self._types
         contents = [
             types.Content(
@@ -79,19 +105,41 @@ class GeminiProvider(Provider):
             types.Content(role="user", parts=[types.Part(text=user_text)])
         )
 
-        resp = self._client.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=self._cfg.temperature,
-                max_output_tokens=self._cfg.max_reply_tokens,
-                http_options=types.HttpOptions(
-                    timeout=int(self._cfg.gemini_timeout * 1000)
-                ),
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=self._cfg.temperature,
+            max_output_tokens=self._cfg.max_reply_tokens,
+            tools=self._tools_arg(toolbox),
+            http_options=types.HttpOptions(
+                timeout=int(self._cfg.gemini_timeout * 1000)
             ),
         )
-        text = _clean(resp.text)
+
+        resp = None
+        for _ in range(self._cfg.max_tool_iterations):
+            resp = self._client.models.generate_content(
+                model=self._model, contents=contents, config=config
+            )
+            calls = resp.function_calls or []
+            if not calls:
+                break
+            contents.append(resp.candidates[0].content)
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name=c.name,
+                            response={
+                                "result": toolbox.call(c.name, dict(c.args or {}))
+                            },
+                        )
+                        for c in calls
+                    ],
+                )
+            )
+
+        text = _clean(resp.text if resp else None)
         if not text:
             raise BrainError("empty response from Gemini")
         return text
@@ -109,31 +157,60 @@ class OllamaProvider(Provider):
         self._models = list(cfg.ollama_models)
         self._cfg = cfg
 
-        # Fail fast (and loudly) if the server is down or the models are
-        # missing, so we degrade to "no provider" cleanly at startup.
         available = {m.model for m in self._client.list().models}
-        self._models = [m for m in self._models if m in available] or self._models
         if not available:
             raise BrainError(f"Ollama at {cfg.ollama_host} has no models")
+        self._models = [m for m in self._models if m in available] or self._models
 
-    def generate(self, system: str, history: list[Turn], user_text: str) -> str:
-        messages = [{"role": "system", "content": system}]
-        messages += [{"role": t.role, "content": t.content} for t in history]
-        messages.append({"role": "user", "content": user_text})
+    @staticmethod
+    def _tools_arg(toolbox: Toolbox | None):
+        if not toolbox or not len(toolbox):
+            return None
+        return [
+            {"type": "function", "function": d} for d in toolbox.declarations()
+        ]
+
+    def _run_model(self, model, base_messages, tools_arg, toolbox) -> str:
+        messages = list(base_messages)
+        resp = None
+        for _ in range(self._cfg.max_tool_iterations):
+            resp = self._client.chat(
+                model=model,
+                messages=messages,
+                tools=tools_arg,
+                think=False,
+                options={
+                    "temperature": self._cfg.temperature,
+                    "num_predict": self._cfg.max_reply_tokens,
+                },
+            )
+            calls = resp.message.tool_calls or []
+            if not calls:
+                break
+            messages.append(resp.message)
+            for call in calls:
+                result = toolbox.call(
+                    call.function.name, dict(call.function.arguments or {})
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": result,
+                        "tool_name": call.function.name,
+                    }
+                )
+        return _clean(resp.message.content if resp else None)
+
+    def generate(self, system, history, user_text, toolbox):
+        base = [{"role": "system", "content": system}]
+        base += [{"role": t.role, "content": t.content} for t in history]
+        base.append({"role": "user", "content": user_text})
+        tools_arg = self._tools_arg(toolbox)
 
         last_error: Exception | None = None
         for model in self._models:
             try:
-                resp = self._client.chat(
-                    model=model,
-                    messages=messages,
-                    think=False,  # ignored by non-reasoning models
-                    options={
-                        "temperature": self._cfg.temperature,
-                        "num_predict": self._cfg.max_reply_tokens,
-                    },
-                )
-                text = _clean(resp["message"]["content"])
+                text = self._run_model(model, base, tools_arg, toolbox)
                 if text:
                     return text
                 last_error = BrainError(f"{model} returned nothing")
@@ -146,10 +223,10 @@ class OllamaProvider(Provider):
 # The chain
 # --------------------------------------------------------------------------
 class Brain:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, toolbox: Toolbox | None = None) -> None:
         self._cfg = cfg
+        self._toolbox = toolbox
         self._system = load_system_prompt(cfg.persona_name)
-        # deque of Turns; maxlen keeps the last N exchanges (2 turns each).
         self._history: deque[Turn] = deque(maxlen=max(cfg.history_turns, 0) * 2)
 
         self._providers: list[Provider] = []
@@ -164,14 +241,17 @@ class Brain:
                 "No brain available. Set GEMINI_API_KEY in .env, or start "
                 "Ollama (`ollama serve`) with a model pulled."
             )
-        print(f"  brain: {' -> '.join(p.name for p in self._providers)}")
+        tools = f", {len(toolbox)} tools" if toolbox and len(toolbox) else ""
+        print(f"  brain: {' -> '.join(p.name for p in self._providers)}{tools}")
 
     def ask(self, user_text: str) -> str:
         history = list(self._history)
         errors: list[str] = []
         for provider in self._providers:
             try:
-                reply = provider.generate(self._system, history, user_text)
+                reply = provider.generate(
+                    self._system, history, user_text, self._toolbox
+                )
             except Exception as exc:  # noqa: BLE001 — fall through to next provider
                 errors.append(f"{provider.name}: {exc}")
                 print(
