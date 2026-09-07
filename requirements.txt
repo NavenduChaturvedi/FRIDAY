@@ -19,6 +19,9 @@ soundfile==0.14.0        # used by the STT smoke test (test_whisper.py)
 # --- Brain: primary (cloud) ---
 google-genai==2.22.0     # Gemini API — needs GEMINI_API_KEY in .env
 
+# --- Brain: Azure OpenAI (gpt-4.1-mini etc.) ---
+openai==3.8.0
+
 # --- Brain: fallback (local) ---
 ollama==0.6.2            # talks to a local Ollama server (OLLAMA_HOST)
 
