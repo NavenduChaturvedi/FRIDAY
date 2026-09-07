@@ -1,0 +1,26 @@
+# F.R.I.D.A.Y. runtime dependencies (direct only).
+# Full transitive lock: requirements.lock  (pip install -r requirements.lock)
+#
+#   py -3.12 -m venv .venv
+#   .venv\Scripts\Activate.ps1
+#   pip install -r requirements.txt
+
+# --- Speech-to-text ---
+faster-whisper==1.2.1
+
+# --- Text-to-speech ---
+piper-tts==1.8.0
+
+# --- Audio I/O ---
+sounddevice==0.5.6
+numpy==2.5.3
+soundfile==0.14.0        # used by the STT smoke test (test_whisper.py)
+
+# --- Brain: primary (cloud) ---
+google-genai==2.22.0     # Gemini API — needs GEMINI_API_KEY in .env
+
+# --- Brain: fallback (local) ---
+ollama==0.6.2            # talks to a local Ollama server (OLLAMA_HOST)
+
+# --- Config ---
+python-dotenv==1.2.3
