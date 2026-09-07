@@ -43,33 +43,65 @@ def _env_list(name: str, default: list[str]) -> list[str]:
 class Config:
     """Immutable snapshot of every setting the app needs."""
 
-    # --- Brain: Gemini (primary) --------------------------------------------
-    # No key -> Gemini is skipped and FRIDAY runs entirely on local Ollama.
+    # --- Brain: provider order --------------------------------------------
+    # Providers are tried in this order; the first to answer wins. Local
+    # Ollama leads for now — flip to "gemini,ollama" once there's a paid key.
+    brain_order: list[str] = field(
+        default_factory=lambda: _env_list("FRIDAY_BRAIN_ORDER", ["ollama", "gemini"])
+    )
+
+    # --- Brain: Gemini ---------------------------------------------------
+    # No key -> Gemini is skipped.
     gemini_api_key: str | None = os.getenv("GEMINI_API_KEY") or None
-    # "gemini-flash-latest" is an alias that always points at the current
-    # flash model, so this default doesn't rot when a version is retired.
+    # "*-latest" aliases track the current model so the default doesn't rot.
+    # gemini_model handles CHAT; gemini_model_heavy handles COMPLEX + CODE.
     gemini_model: str = field(
-        default_factory=lambda: _env_str(
-            "FRIDAY_GEMINI_MODEL", "gemini-flash-latest"
-        )
+        default_factory=lambda: _env_str("FRIDAY_GEMINI_MODEL", "gemini-flash-latest")
+    )
+    gemini_model_heavy: str = field(
+        default_factory=lambda: _env_str("FRIDAY_GEMINI_MODEL_HEAVY", "")
     )
     gemini_timeout: float = field(
         default_factory=lambda: _env_float("FRIDAY_GEMINI_TIMEOUT", 20.0)
     )
 
-    # --- Brain: Ollama (fallback) -----------------------------------------
+    # --- Brain: Ollama -------------------------------------------------
     ollama_host: str = field(
         default_factory=lambda: _env_str("OLLAMA_HOST", "http://localhost:11434")
     )
-    # Tried in order; first one that answers wins.
+    # Model per request type (see friday/router.py). The routed model is tried
+    # first; ollama_models is the fallback if it's unavailable or fails.
+    ollama_model_chat: str = field(
+        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_CHAT", "qwen3.5:4b")
+    )
+    ollama_model_complex: str = field(
+        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_COMPLEX", "gemma4:latest")
+    )
+    ollama_model_code: str = field(
+        default_factory=lambda: _env_str(
+            "FRIDAY_OLLAMA_MODEL_CODE", "qwen2.5-coder:14b"
+        )
+    )
     ollama_models: list[str] = field(
         default_factory=lambda: _env_list(
-            "FRIDAY_OLLAMA_MODELS", ["qwen2.5:3b", "qwen3.5:4b", "gemma4:latest"]
+            "FRIDAY_OLLAMA_MODELS",
+            ["qwen3.5:4b", "gemma4:latest", "qwen2.5-coder:14b", "qwen2.5:3b"],
         )
     )
     ollama_timeout: float = field(
-        default_factory=lambda: _env_float("FRIDAY_OLLAMA_TIMEOUT", 60.0)
+        default_factory=lambda: _env_float("FRIDAY_OLLAMA_TIMEOUT", 150.0)
     )
+
+    def gemini_model_for(self, route: str) -> str:
+        heavy = self.gemini_model_heavy or self.gemini_model
+        return self.gemini_model if route == "chat" else heavy
+
+    def ollama_model_for(self, route: str) -> str:
+        return {
+            "chat": self.ollama_model_chat,
+            "complex": self.ollama_model_complex,
+            "code": self.ollama_model_code,
+        }.get(route, self.ollama_model_chat)
 
     # --- Brain: shared generation params --------------------------------
     max_reply_tokens: int = field(
@@ -168,8 +200,13 @@ class Config:
         return p.with_name(p.name + ".json")
 
     def summary(self) -> str:
-        brain = "gemini+ollama" if self.gemini_api_key else "ollama-only"
+        order = [
+            p for p in self.brain_order
+            if p != "gemini" or self.gemini_api_key
+        ]
         return (
-            f"brain={brain}  whisper={self.whisper_model}  "
-            f"voice={self.piper_voice_path.name}  history={self.history_turns} turns"
+            f"brain={'>'.join(order)}  "
+            f"ollama[chat={self.ollama_model_chat}, "
+            f"complex={self.ollama_model_complex}, code={self.ollama_model_code}]  "
+            f"whisper={self.whisper_model}  voice={self.piper_voice_path.name}"
         )

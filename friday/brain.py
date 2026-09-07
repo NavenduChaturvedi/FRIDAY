@@ -1,17 +1,16 @@
-"""FRIDAY's brain: a provider chain with tool use and rolling conversation memory.
+"""FRIDAY's brain: provider chain + per-request model routing + tool use.
 
-Order of preference:
+For each turn:
 
-1. **Gemini** (cloud) — used when ``GEMINI_API_KEY`` is set.
-2. **Ollama** (local) — the fallback. Tries each model in
-   ``Config.ollama_models`` until one answers. Fully offline.
-
-``Brain.ask()`` walks the chain: the first provider that returns a non-empty
-answer wins, and only then is the exchange written to history. Each provider
-runs its own tool-call loop — if the model asks for a tool, we run it (via the
-``Toolbox``), feed the result back, and let the model continue, up to
-``Config.max_tool_iterations`` rounds. If every provider fails it raises
-``BrainError`` and the loop stays alive.
+1. ``router.classify()`` sorts the request into CHAT / COMPLEX / CODE.
+2. Providers are tried in ``Config.brain_order`` (default: Ollama, then
+   Gemini). Each provider picks its own model for that route:
+     - Ollama:  qwen3.5:4b (chat) / gemma4 (complex) / qwen2.5-coder:14b (code),
+                with ``ollama_models`` as the fallback list.
+     - Gemini:  ``gemini_model`` (chat) / ``gemini_model_heavy`` (complex+code).
+3. The chosen model runs a tool-call loop (up to ``max_tool_iterations``).
+4. First provider to return non-empty text wins; only then is the exchange
+   written to history. If all fail, ``BrainError`` — the loop stays alive.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from dataclasses import dataclass
 
 from .config import Config
 from .persona import load_system_prompt
+from .router import Route, classify
 from .toolbox import Toolbox
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
@@ -56,6 +56,7 @@ class Provider:
         history: list[Turn],
         user_text: str,
         toolbox: Toolbox | None,
+        route: Route,
     ) -> str:
         raise NotImplementedError
 
@@ -72,7 +73,6 @@ class GeminiProvider(Provider):
 
         self._types = types
         self._client = genai.Client(api_key=cfg.gemini_api_key)
-        self._model = cfg.gemini_model
         self._cfg = cfg
 
     def _tools_arg(self, toolbox: Toolbox | None):
@@ -92,8 +92,11 @@ class GeminiProvider(Provider):
             )
         ]
 
-    def generate(self, system, history, user_text, toolbox):
+    def generate(self, system, history, user_text, toolbox, route):
         types = self._types
+        model = self._cfg.gemini_model_for(route.value)
+        print(f"  brain: {route.value} → gemini/{model}")
+
         contents = [
             types.Content(
                 role="model" if t.role == "assistant" else "user",
@@ -118,7 +121,7 @@ class GeminiProvider(Provider):
         resp = None
         for _ in range(self._cfg.max_tool_iterations):
             resp = self._client.models.generate_content(
-                model=self._model, contents=contents, config=config
+                model=model, contents=contents, config=config
             )
             calls = resp.function_calls or []
             if not calls:
@@ -154,13 +157,17 @@ class OllamaProvider(Provider):
         self._client = ollama.Client(
             host=cfg.ollama_host, timeout=cfg.ollama_timeout
         )
-        self._models = list(cfg.ollama_models)
         self._cfg = cfg
 
-        available = {m.model for m in self._client.list().models}
-        if not available:
+        self._available = {m.model for m in self._client.list().models}
+        if not self._available:
             raise BrainError(f"Ollama at {cfg.ollama_host} has no models")
-        self._models = [m for m in self._models if m in available] or self._models
+
+    def _model_order(self, route: Route) -> list[str]:
+        routed = self._cfg.ollama_model_for(route.value)
+        chain = [routed] + [m for m in self._cfg.ollama_models if m != routed]
+        pulled = [m for m in chain if m in self._available]
+        return pulled or chain  # if nothing matches, try the chain anyway
 
     @staticmethod
     def _tools_arg(toolbox: Toolbox | None):
@@ -201,22 +208,36 @@ class OllamaProvider(Provider):
                 )
         return _clean(resp.message.content if resp else None)
 
-    def generate(self, system, history, user_text, toolbox):
+    def generate(self, system, history, user_text, toolbox, route):
         base = [{"role": "system", "content": system}]
         base += [{"role": t.role, "content": t.content} for t in history]
         base.append({"role": "user", "content": user_text})
         tools_arg = self._tools_arg(toolbox)
 
+        order = self._model_order(route)
+        print(f"  brain: {route.value} → ollama/{order[0]}")
+
         last_error: Exception | None = None
-        for model in self._models:
+        for i, model in enumerate(order):
             try:
                 text = self._run_model(model, base, tools_arg, toolbox)
                 if text:
+                    if i:
+                        print(f"  brain: (fell back to ollama/{model})")
                     return text
                 last_error = BrainError(f"{model} returned nothing")
             except Exception as exc:  # noqa: BLE001 — try the next model
                 last_error = exc
+            if i + 1 < len(order):
+                print(
+                    f"  brain: ollama/{model} didn't answer ({last_error}); "
+                    f"trying ollama/{order[i + 1]}",
+                    file=sys.stderr,
+                )
         raise BrainError(f"all Ollama models failed ({last_error})")
+
+
+_FACTORIES = {"gemini": GeminiProvider, "ollama": OllamaProvider}
 
 
 # --------------------------------------------------------------------------
@@ -230,27 +251,37 @@ class Brain:
         self._history: deque[Turn] = deque(maxlen=max(cfg.history_turns, 0) * 2)
 
         self._providers: list[Provider] = []
-        for factory in (GeminiProvider, OllamaProvider):
+        for key in cfg.brain_order:
+            factory = _FACTORIES.get(key)
+            if factory is None:
+                print(f"  brain: unknown provider {key!r} in FRIDAY_BRAIN_ORDER",
+                      file=sys.stderr)
+                continue
             try:
                 self._providers.append(factory(cfg))
             except Exception as exc:  # noqa: BLE001 — provider just isn't available
-                print(f"  brain: {factory.name} unavailable ({exc})", file=sys.stderr)
+                print(f"  brain: {key} unavailable ({exc})", file=sys.stderr)
 
         if not self._providers:
             raise BrainError(
-                "No brain available. Set GEMINI_API_KEY in .env, or start "
-                "Ollama (`ollama serve`) with a model pulled."
+                "No brain available. Start Ollama (`ollama serve`) with a model "
+                "pulled, or set GEMINI_API_KEY in .env."
             )
         tools = f", {len(toolbox)} tools" if toolbox and len(toolbox) else ""
         print(f"  brain: {' -> '.join(p.name for p in self._providers)}{tools}")
 
     def ask(self, user_text: str) -> str:
+        route = classify(user_text)
+        # A coding request rarely needs weather/timers/search, and the tool
+        # schemas bloat the prompt — which the big code model is slowest to
+        # chew through. Skip tools for CODE.
+        toolbox = None if route is Route.CODE else self._toolbox
         history = list(self._history)
         errors: list[str] = []
         for provider in self._providers:
             try:
                 reply = provider.generate(
-                    self._system, history, user_text, self._toolbox
+                    self._system, history, user_text, toolbox, route
                 )
             except Exception as exc:  # noqa: BLE001 — fall through to next provider
                 errors.append(f"{provider.name}: {exc}")
