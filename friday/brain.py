@@ -15,7 +15,6 @@ For each turn:
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from collections import deque
@@ -73,91 +72,6 @@ class Provider:
         route: Route,
     ) -> str:
         raise NotImplementedError
-
-
-class AzureProvider(Provider):
-    """Azure OpenAI (gpt-4.1-mini and friends), via the OpenAI chat API."""
-
-    name = "azure"
-
-    def __init__(self, cfg: Config) -> None:
-        if not (cfg.azure_api_key and cfg.azure_endpoint):
-            raise BrainError("AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT not set")
-
-        from openai import AzureOpenAI
-
-        self._client = AzureOpenAI(
-            api_key=cfg.azure_api_key,
-            azure_endpoint=cfg.azure_endpoint,
-            api_version=cfg.azure_api_version,
-            timeout=cfg.azure_timeout,
-            max_retries=1,
-        )
-        self._cfg = cfg
-
-    @staticmethod
-    def _tools_arg(toolbox: Toolbox | None):
-        if not toolbox or not len(toolbox):
-            return None
-        return [
-            {"type": "function", "function": d} for d in toolbox.declarations()
-        ]
-
-    def generate(self, system, history, user_text, toolbox, route):
-        deployment = self._cfg.azure_deployment_for(route.value)
-        print(f"  brain: {route.value} → azure/{deployment}")
-
-        messages: list[dict] = [{"role": "system", "content": system}]
-        messages += [{"role": t.role, "content": t.content} for t in history]
-        messages.append({"role": "user", "content": user_text})
-        tools_arg = self._tools_arg(toolbox)
-
-        msg = None
-        for _ in range(self._cfg.max_tool_iterations):
-            resp = self._client.chat.completions.create(
-                model=deployment,
-                messages=messages,
-                tools=tools_arg,
-                temperature=self._cfg.temperature,
-                max_tokens=self._cfg.max_reply_tokens,
-            )
-            msg = resp.choices[0].message
-            if not msg.tool_calls:
-                break
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": msg.content,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in msg.tool_calls
-                    ],
-                }
-            )
-            for tc in msg.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except ValueError:
-                    args = {}
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": toolbox.call(tc.function.name, args),
-                    }
-                )
-
-        text = _clean(msg.content if msg else None)
-        if not text:
-            raise BrainError("empty response from Azure")
-        return text
 
 
 class GeminiProvider(Provider):
@@ -361,11 +275,7 @@ class OllamaProvider(Provider):
         raise BrainError(f"all Ollama models failed ({last_error})")
 
 
-_FACTORIES = {
-    "azure": AzureProvider,
-    "gemini": GeminiProvider,
-    "ollama": OllamaProvider,
-}
+_FACTORIES = {"gemini": GeminiProvider, "ollama": OllamaProvider}
 
 
 # --------------------------------------------------------------------------

@@ -17,7 +17,7 @@ microphone ──► sounddevice InputStream (16 kHz mono)
                 └─► faster-whisper transcribe ──► user_text
                     └─► Brain.ask()
                         │   router.classify() → CHAT | COMPLEX | CODE
-                        │   providers tried in FRIDAY_BRAIN_ORDER (azure, ollama, gemini)
+                        │   providers tried in FRIDAY_BRAIN_ORDER (ollama, gemini)
                         │     each picks its model for that route
                         │   tool-call loop: model → Toolbox.call() → result
                         │     → model, up to max_tool_iterations rounds
@@ -77,10 +77,9 @@ python test_whisper.py               # STT only
 
 Stop the loop by saying "goodbye Friday" / "exit loop", or Ctrl+C.
 
-With no cloud keys the app runs fine on local Ollama alone — it just needs
-`ollama serve` up with the routed models pulled. Add `AZURE_OPENAI_*` (or
-`GEMINI_API_KEY`) to `.env` and that provider jumps to the front of the chain
-automatically.
+Without `GEMINI_API_KEY` the app runs fine — it just goes straight to Ollama.
+Ollama must be running (`ollama serve`) with at least one of the models in
+`FRIDAY_OLLAMA_MODELS` pulled.
 
 ## Architecture notes
 
@@ -88,26 +87,18 @@ automatically.
   env var with a default; `.env` is loaded at import. Add a knob here, read
   it from `Config`, document it in `.env.example`.
 - **`Brain` builds its provider list at construction**, in `FRIDAY_BRAIN_ORDER`
-  order (default `azure,ollama,gemini`). A provider that can't initialise (no
-  key, Ollama down) is skipped with a stderr note — so the default is safe with
-  or without Azure/Gemini configured; if none survive, `BrainError` before the
-  loop starts. At ask time, providers are tried in order, first non-empty reply
-  wins and is written to history.
-- **Three providers**, all using the same route → model mapping:
-  - `azure` — Azure OpenAI (`AzureProvider`, OpenAI chat-completions API).
-    `azure_deployment` (chat) / `azure_deployment_heavy` (complex+code, blank =
-    same). Needs `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` + a
-    deployment name. gpt-4.1-mini is the intended default — cheap, fast, good
-    at tools and persona. This is the day-to-day driver when configured.
-  - `ollama` — local. `ollama_model_{chat,complex,code}` (qwen3.5:4b / gemma4 /
-    qwen2.5-coder:14b), falling back through `ollama_models`. Offline safety
-    net + laptop memory guard (below).
-  - `gemini` — `gemini_model` / `gemini_model_heavy`. Free tier is stingy
-    (~20 req/day); last-resort.
-- **Per-request model routing (`friday/router.py`).** `classify()` is a keyword
-  pass → `CHAT` / `COMPLEX` / `CODE`. A misroute is cheap — wrong-but-capable
-  model, and the fallback still runs. The console prints `route → provider/model`
-  each turn.
+  order (default `ollama,gemini` — flip to `gemini,ollama` with a paid key).
+  A provider that can't initialise (no API key, Ollama down) is skipped with a
+  stderr note; if none survive, `BrainError` before the loop starts. At ask
+  time, providers are tried in order, first non-empty reply wins and is written
+  to history.
+- **Per-request model routing (`friday/router.py`).** `classify()` is a
+  keyword pass → `CHAT` / `COMPLEX` / `CODE`. Each provider maps the route to a
+  model: Ollama → `ollama_model_{chat,complex,code}` (qwen3.5:4b / gemma4 /
+  qwen2.5-coder:14b), falling back through `ollama_models`; Gemini →
+  `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
+  A misroute is cheap — wrong-but-capable model, and the fallback still runs.
+  The console prints `route → provider/model` each turn.
 - **CODE requests are sent without tool declarations** (`Brain.ask`). A coding
   question rarely needs weather/timers, and 18 tool schemas bloat the prompt —
   which the 14b code model is slowest to process on CPU.

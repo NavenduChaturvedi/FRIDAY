@@ -44,31 +44,10 @@ class Config:
     """Immutable snapshot of every setting the app needs."""
 
     # --- Brain: provider order --------------------------------------------
-    # Providers are tried in this order; the first to answer wins. A provider
-    # that isn't configured (no key) is silently skipped, so the default is
-    # safe whether or not Azure/Gemini are set up.
+    # Providers are tried in this order; the first to answer wins. Local
+    # Ollama leads for now — flip to "gemini,ollama" once there's a paid key.
     brain_order: list[str] = field(
-        default_factory=lambda: _env_list(
-            "FRIDAY_BRAIN_ORDER", ["azure", "ollama", "gemini"]
-        )
-    )
-
-    # --- Brain: Azure OpenAI ------------------------------------------
-    # Set all of KEY + ENDPOINT + deployment to enable. gpt-4.1-mini is a good
-    # cheap default. deployment = the name you gave it in the Azure portal.
-    azure_api_key: str | None = os.getenv("AZURE_OPENAI_API_KEY") or None
-    azure_endpoint: str | None = os.getenv("AZURE_OPENAI_ENDPOINT") or None
-    azure_api_version: str = field(
-        default_factory=lambda: _env_str("AZURE_OPENAI_API_VERSION", "2024-10-21")
-    )
-    azure_deployment: str = field(
-        default_factory=lambda: _env_str("FRIDAY_AZURE_DEPLOYMENT", "gpt-4.1-mini")
-    )
-    azure_deployment_heavy: str = field(
-        default_factory=lambda: _env_str("FRIDAY_AZURE_DEPLOYMENT_HEAVY", "")
-    )
-    azure_timeout: float = field(
-        default_factory=lambda: _env_float("FRIDAY_AZURE_TIMEOUT", 30.0)
+        default_factory=lambda: _env_list("FRIDAY_BRAIN_ORDER", ["ollama", "gemini"])
     )
 
     # --- Brain: Gemini ---------------------------------------------------
@@ -118,10 +97,6 @@ class Config:
     ollama_keep_alive: str = field(
         default_factory=lambda: _env_str("FRIDAY_OLLAMA_KEEP_ALIVE", "10m")
     )
-
-    def azure_deployment_for(self, route: str) -> str:
-        heavy = self.azure_deployment_heavy or self.azure_deployment
-        return self.azure_deployment if route == "chat" else heavy
 
     def gemini_model_for(self, route: str) -> str:
         heavy = self.gemini_model_heavy or self.gemini_model
@@ -239,12 +214,10 @@ class Config:
         return p.with_name(p.name + ".json")
 
     def summary(self) -> str:
-        configured = {
-            "azure": bool(self.azure_api_key and self.azure_endpoint),
-            "gemini": bool(self.gemini_api_key),
-            "ollama": True,
-        }
-        order = [p for p in self.brain_order if configured.get(p, False)]
+        order = [
+            p for p in self.brain_order
+            if p != "gemini" or self.gemini_api_key
+        ]
         return (
             f"brain={'>'.join(order)}  "
             f"ollama[chat={self.ollama_model_chat}, "
