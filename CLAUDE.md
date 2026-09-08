@@ -103,13 +103,16 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
-- **Tools per route** (`Brain.stream_reply`). CHAT sees every enabled tool.
-  COMPLEX sees only `FRIDAY_COMPLEX_TOOLS` (default: `get_time`, `get_weather`,
-  `web_search`, `wikipedia_lookup`) — a "look it up" subset via
-  `Toolbox.subset()` / `_ToolboxView`, small enough that gemma4 doesn't recite
-  the schema list back instead of answering. CODE gets none. The full
-  18-schema list on COMPLEX broke gemma4 (menu recitation) — don't widen it
-  without re-testing that model.
+- **Tools per route** (`Brain._tools_for`). Each route gets a curated set via
+  `Toolbox.subset()` / `_ToolboxView` — qwen3.5:4b loses track of message
+  roles when handed all 18 schemas (tested: 18 tools → 1/3 correct on a
+  factual+tool question, one answer treating the tool result as the user's
+  message; 5 tools → 3/3 clean). `FRIDAY_CHAT_TOOLS` (~10: time, weather,
+  timer, reminder, notes, memory, web_search, calculate, system_status,
+  launch_app), `FRIDAY_COMPLEX_TOOLS` (4: time, weather, web_search,
+  wikipedia_lookup). CODE gets none. Set either to `all` once a capable cloud
+  model leads. `_ToolboxView.call()` still delegates to the full toolbox, so a
+  tool the model somehow names outside its set still runs.
 - **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
   `qwen3.5:4b` (chat, 3 GB) stays resident; before loading `gemma4` or
   `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`

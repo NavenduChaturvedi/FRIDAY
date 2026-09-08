@@ -417,15 +417,7 @@ class Brain:
             return
 
         route = classify(user_text)
-        # CHAT gets every tool. COMPLEX gets a small "look it up" subset — the
-        # full 18-schema list makes gemma4 recite the menu instead of
-        # answering. CODE gets none (it's answered from the model's knowledge).
-        if route is Route.CHAT or self._toolbox is None:
-            toolbox = self._toolbox
-        elif route is Route.COMPLEX:
-            toolbox = self._toolbox.subset(self._cfg.complex_tools)
-        else:
-            toolbox = None
+        toolbox = self._tools_for(route)
         system = self._system()
         history = list(self._history)
 
@@ -477,6 +469,22 @@ class Brain:
 
     def ask(self, user_text: str) -> str:
         return " ".join(self.stream_reply(user_text)).strip()
+
+    def _tools_for(self, route: Route):
+        """Which tools this route may call. Each route gets a curated set — a
+        small local model can't juggle all 18 schemas without losing track of
+        message roles. CODE gets none; "all" in the config means everything."""
+        if self._toolbox is None:
+            return None
+        if route is Route.CHAT:
+            names = self._cfg.chat_tools
+        elif route is Route.COMPLEX:
+            names = self._cfg.complex_tools
+        else:
+            return None
+        if not names or [n.lower() for n in names] == ["all"]:
+            return self._toolbox
+        return self._toolbox.subset(names)
 
     def reset(self) -> None:
         self._history.clear()

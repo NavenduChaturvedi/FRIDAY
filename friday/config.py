@@ -132,9 +132,19 @@ class Config:
     tools_enabled: list[str] = field(
         default_factory=lambda: _env_list("FRIDAY_TOOLS_ENABLED", [])
     )
-    # CHAT requests see every enabled tool. COMPLEX gets only this handful —
-    # enough for "look it up" without the 18-schema prompt bloat that makes
-    # gemma4 recite the tool list. CODE gets none.
+    # Tools offered per route. A small local model (qwen3.5:4b) loses track of
+    # message roles when handed all 18 schemas at once, so each route gets a
+    # curated set. CODE gets none. Set either to "all" for the full list —
+    # sensible once a capable cloud model leads the chain.
+    chat_tools: list[str] = field(
+        default_factory=lambda: _env_list(
+            "FRIDAY_CHAT_TOOLS",
+            [
+                "get_time", "get_weather", "set_timer", "reminder", "notes",
+                "memory", "web_search", "calculate", "system_status", "launch_app",
+            ],
+        )
+    )
     complex_tools: list[str] = field(
         default_factory=lambda: _env_list(
             "FRIDAY_COMPLEX_TOOLS",
