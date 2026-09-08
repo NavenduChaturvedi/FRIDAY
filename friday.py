@@ -7,8 +7,8 @@ press Ctrl+C) to stop.
 
 The pipeline, one turn at a time:
 
-    mic → faster-whisper → Brain (routed Ollama/Gemini, with tools)
-        → sentence by sentence → Piper → speakers
+    wake word → mic → faster-whisper → Brain (routed Ollama/Gemini, with tools)
+              → sentence by sentence → Piper → speakers
 
 The brain streams its reply a sentence at a time and the mouth pipelines
 synthesis with playback, so FRIDAY starts talking before she's finished
@@ -39,6 +39,7 @@ from friday.config import Config
 from friday.text import clean_text_for_speech
 from friday.toolbox import Toolbox
 from friday.voice import Ears, Mouth
+from friday.wake import Wake
 
 
 def run() -> int:
@@ -54,9 +55,17 @@ def run() -> int:
 
     ears = Ears(cfg)
     mouth = Mouth(cfg)
+    wake = Wake(cfg)
     brain = Brain(cfg, toolbox)
+    print(f"  wake: {wake.describe()}")
 
-    print("\nOnline. Say 'goodbye Friday' to stop.\n")
+    if wake.mode == "porcupine":
+        hint = f"Say '{wake.keyword}' to wake her."
+    elif wake.mode == "filter":
+        hint = f"Name her — '{wake.word}, …' — to get an answer."
+    else:
+        hint = "Responding to everything."
+    print(f"\nOnline. {hint}\n")
 
     while True:
         # Anything a tool queued (a timer going off) gets spoken first.
@@ -65,16 +74,23 @@ def run() -> int:
             mouth.say(clean_text_for_speech(note))
         mouth.wait()
 
-        user_text = ears.listen()
-        if not user_text:
+        wake.wait()  # blocks until the wake word in Porcupine mode; else instant
+        heard = ears.listen()
+        if not heard:
             continue
 
-        print(f"👤 {user_text}")
-        if any(phrase in user_text.lower() for phrase in cfg.exit_phrases):
+        if any(phrase in heard.lower() for phrase in cfg.exit_phrases):
             mouth.say("Powering down. Catch you later.")
             mouth.wait()
             print("👋 done.")
             return 0
+
+        if not wake.addressed(heard):
+            print(f"   (not for me: {heard!r})")
+            continue
+        user_text = wake.strip(heard)
+
+        print(f"👤 {user_text}")
 
         # Speak each sentence as the brain produces it.
         try:

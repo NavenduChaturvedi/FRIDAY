@@ -31,3 +31,9 @@ dateparser==1.4.3        # reminder tool — parses "in 20 minutes", "tomorrow 8
 
 # --- Config ---
 python-dotenv==1.2.3
+
+# --- Optional ---
+# pvporcupine        # real always-on wake word (needs a free Picovoice key).
+#                    # Without it, wake.py falls back to a transcript filter.
+#                    # openWakeWord is NOT an option here — Smart App Control
+#                    # blocks numpy.random, which its scipy/sklearn deps need.

@@ -12,7 +12,8 @@ short lines. Personal project, not production.
 The pipeline is strictly linear and synchronous, one turn at a time:
 
 ```
-microphone ──► sounddevice InputStream (16 kHz mono)
+wake word (friday/wake.py: Porcupine, or a transcript filter)
+  └─► microphone ──► sounddevice InputStream (16 kHz mono)
             └─► user_input.wav
                 └─► faster-whisper transcribe ──► user_text
                     └─► Brain.stream_reply()   (yields clean sentences)
@@ -43,6 +44,7 @@ friday/
   brain.py              provider chain + per-route model pick + tool loop + history + memory
   toolbox.py            discovers tools/*.py, dispatches calls, queues notifications
   voice.py              Ears (mic + faster-whisper), Mouth (Piper + threaded playback)
+  wake.py               wake-word gate — Porcupine, or a transcript filter
   text.py               clean_text_for_speech + SentenceStreamer (delta → sentences)
 tools/                   one .py per tool (~18: get_time, calculate, get_weather,
                          web_search, reminder, notes, memory, …) + _template.py
@@ -55,6 +57,7 @@ test_brain.py            keyboard test of the chain + tools (shows streaming)
 test_router.py           classify() cases, no models
 test_memory.py           MemoryStore, no models
 test_text.py             clean_text_for_speech + SentenceStreamer, no models
+test_wake.py             wake-word addressed()/strip() filter, no models
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
 *.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
@@ -186,6 +189,15 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   triggers or triggers on room noise, tune `FRIDAY_SILENCE_THRESHOLD`. This
   is the most common "it doesn't work". There is also a
   `FRIDAY_MAX_RECORDING_SECONDS` (30) cap so a silent room can't hang it.
+- **Wake word (`friday/wake.py`).** Two modes: **porcupine** (when
+  `PICOVOICE_ACCESS_KEY` is set and `pvporcupine` is installed) blocks on a
+  tiny always-on detector for a Porcupine keyword, then chimes; **filter**
+  (default) lets the pipeline run on any speech but drops a turn unless the
+  transcript names her near the front or trailing on a short utterance
+  ("on Friday…" is excluded as a date). `FRIDAY_WAKE_WORD=off` disables it.
+  openWakeWord was tried first but this machine's **Smart App Control
+  (Enforced)** blocks `numpy.random`'s DLL, which scipy/sklearn need — don't
+  reach for anything in that dependency tree here.
 - **Voice** = the Jenny Dioco `.onnx` in the repo root. Swapping means a new
   `.onnx` + `.onnx.json` pair and `FRIDAY_PIPER_VOICE`. There is no bundled
   Irish voice (FRIDAY's film accent); the US/GB voices in the repo are what

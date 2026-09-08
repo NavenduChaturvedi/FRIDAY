@@ -171,6 +171,19 @@ class Config:
         default_factory=lambda: _env_str("FRIDAY_PERSONA", "friday")
     )
 
+    # --- Wake word (see friday/wake.py) ------------------------------
+    # The word that gets her attention. "off" / empty = respond to everything.
+    # With PICOVOICE_ACCESS_KEY set + pvporcupine installed, a real always-on
+    # detector listens for it (use a Porcupine keyword like "jarvis"); without,
+    # she transcribes any speech but only acts on turns that name her.
+    wake_word: str = field(
+        default_factory=lambda: _env_str("FRIDAY_WAKE_WORD", "friday")
+    )
+    wake_sensitivity: float = field(
+        default_factory=lambda: _env_float("FRIDAY_WAKE_SENSITIVITY", 0.5)
+    )
+    picovoice_key: str | None = os.getenv("PICOVOICE_ACCESS_KEY") or None
+
     # --- Speech-to-text (faster-whisper) ---------------------------------
     # faster-whisper (CTranslate2) is CPU or NVIDIA-CUDA only — it can't use
     # this laptop's AMD NPU or iGPU. On CPU: tiny ~0.7s, base ~1.3s, small
