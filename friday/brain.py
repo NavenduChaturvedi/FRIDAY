@@ -137,7 +137,7 @@ class GeminiProvider(Provider):
             types.Content(role="user", parts=[types.Part(text=user_text)])
         )
 
-        config = types.GenerateContentConfig(
+        base_config = types.GenerateContentConfig(
             system_instruction=system,
             temperature=self._cfg.temperature,
             max_output_tokens=self._cfg.max_reply_tokens,
@@ -146,15 +146,18 @@ class GeminiProvider(Provider):
                 timeout=int(self._cfg.gemini_timeout * 1000)
             ),
         )
+        answer_config = base_config.model_copy(update={"tools": None})
 
+        # Up to N tool rounds, then one forced answer with no tools on offer.
         resp = None
-        for _ in range(self._cfg.max_tool_iterations):
+        prev_sig = None
+        for _ in range(max(self._cfg.max_tool_iterations, 1)):
             resp = self._client.models.generate_content(
-                model=model, contents=contents, config=config
+                model=model, contents=contents, config=base_config
             )
             calls = resp.function_calls or []
             if not calls:
-                break
+                return self._require_text(resp)
             contents.append(resp.candidates[0].content)
             contents.append(
                 types.Content(
@@ -170,7 +173,18 @@ class GeminiProvider(Provider):
                     ],
                 )
             )
+            sig = tuple(sorted(f"{c.name}:{c.args}" for c in calls))
+            if sig == prev_sig:
+                break
+            prev_sig = sig
 
+        resp = self._client.models.generate_content(
+            model=model, contents=contents, config=answer_config
+        )
+        return self._require_text(resp)
+
+    @staticmethod
+    def _require_text(resp) -> str:
         text = _clean(resp.text if resp else None)
         if not text:
             raise BrainError("empty response from Gemini")
@@ -229,25 +243,42 @@ class OllamaProvider(Provider):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _chat_stream(self, model: str, messages: list[dict], tools):
+        return self._client.chat(
+            model=model,
+            messages=messages,
+            tools=tools,
+            think=False,
+            stream=True,
+            keep_alive=self._cfg.ollama_keep_alive,
+            options={
+                "temperature": self._cfg.temperature,
+                "num_predict": self._cfg.max_reply_tokens,
+            },
+        )
+
+    @staticmethod
+    def _sig(tool_calls) -> tuple:
+        return tuple(
+            sorted(
+                f"{tc.function.name}:{tc.function.arguments}" for tc in tool_calls
+            )
+        )
+
     def _stream_model(
         self, model: str, messages: list[dict], tools_arg, toolbox
     ) -> Iterator[str]:
         self._make_room_for(model)
-        for _ in range(self._cfg.max_tool_iterations):
+        # Up to N tool-calling rounds, then — if the model still hasn't given a
+        # plain answer — one final round with no tools on offer, so it has to
+        # reply with what it's gathered. gemma4 is prone to calling tools
+        # forever; this stops it running out the clock and falling through.
+        prev_sig = None
+
+        for _ in range(max(self._cfg.max_tool_iterations, 1)):
             content: list[str] = []
             tool_calls: list = []
-            for chunk in self._client.chat(
-                model=model,
-                messages=messages,
-                tools=tools_arg,
-                think=False,
-                stream=True,
-                keep_alive=self._cfg.ollama_keep_alive,
-                options={
-                    "temperature": self._cfg.temperature,
-                    "num_predict": self._cfg.max_reply_tokens,
-                },
-            ):
+            for chunk in self._chat_stream(model, messages, tools_arg):
                 delta = chunk.message.content or ""
                 if delta:
                     content.append(delta)
@@ -257,17 +288,13 @@ class OllamaProvider(Provider):
 
             if not tool_calls:
                 return
+
             messages.append(
                 {
                     "role": "assistant",
                     "content": "".join(content),
                     "tool_calls": [
-                        {
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            }
-                        }
+                        {"function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                         for tc in tool_calls
                     ],
                 }
@@ -282,6 +309,17 @@ class OllamaProvider(Provider):
                         "tool_name": tc.function.name,
                     }
                 )
+
+            sig = self._sig(tool_calls)
+            if sig == prev_sig:
+                break  # spinning on the same call — cut to the answer
+            prev_sig = sig
+
+        # Forced answer round: no tools on offer.
+        for chunk in self._chat_stream(model, messages, None):
+            delta = chunk.message.content or ""
+            if delta:
+                yield delta
 
     def stream(self, system, history, user_text, toolbox, route):
         base = [{"role": "system", "content": system}]

@@ -136,7 +136,12 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   them at startup; a bad file is skipped, not fatal. Declarations are
   provider-neutral JSON Schema, translated per provider in `brain.py`
   (`parameters_json_schema` for Gemini, `{"type":"function",...}` for Ollama).
-  Each provider runs its own tool loop, capped at `FRIDAY_MAX_TOOL_ITERATIONS`.
+  Each provider runs its own tool loop: up to `FRIDAY_MAX_TOOL_ITERATIONS`
+  tool-calling rounds, then — if the model *still* hasn't answered — one more
+  round with no tools offered, so it has to reply with what it gathered
+  (gemma4 likes to call tools forever; this stops it running out the clock and
+  falling through to the next model). Repeating the same tool call short-cuts
+  straight to that forced answer.
   A tool can take `notify` in its signature to speak later (timer/reminder);
   the message is queued on `Toolbox.notifications` and the main loop drains it
   at the top of the next turn — so it's only *heard* when you next speak to
