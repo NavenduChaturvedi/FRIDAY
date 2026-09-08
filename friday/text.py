@@ -27,9 +27,14 @@ def clean_text_for_speech(text: str) -> str:
     # Fenced code blocks: keep the code, drop the ``` markers.
     text = re.sub(r"```[a-zA-Z0-9_+-]*\n?", "", text)
 
-    # Bold / italic markers, only when they wrap text — so "2 * 3" and a lone
-    # "*" survive.
+    # Horizontal rules ("---", "***", "___"), whether alone or leading a line.
+    text = re.sub(r"^\s*([-*_])\1{2,}\s*", "", text, flags=re.MULTILINE)
+
+    # Bold / italic markers, only when they wrap text — so "2 * 3" survives.
     text = re.sub(r"(\*\*|\*|__|_)(?=\S)(.+?)(?<=\S)\1", r"\2", text)
+
+    # Stray bold markers left over from a split mid-emphasis (e.g. "**1.").
+    text = re.sub(r"\*\*|__", "", text)
 
     # Headers: "### Title" -> "Title"
     text = re.sub(r"^\s{0,3}#+\s+", "", text, flags=re.MULTILINE)
@@ -87,9 +92,17 @@ class SentenceStreamer:
     def _is_real_boundary(self, upto: str) -> bool:
         if len(upto.strip()) < self._min:
             return False
-        # "... Dr." — last word is an abbreviation, keep going
-        last = re.split(r"[\s(]", upto.rstrip(".!?…\"')]"))[-1].lower()
-        return last not in _ABBREV
+        # The token right before the "." — strip trailing sentence punctuation
+        # and any markdown clinging to it.
+        token = re.split(r"[\s(]", upto.rstrip('.!?…"\')]'))[-1]
+        core = token.strip("*_#>~`-–—").lower()
+        if not core or core in _ABBREV:
+            return False
+        if core.isdigit():  # "1." "2." — a numbered-list marker, not a sentence
+            return False
+        if len(core) == 1 and core.isalpha():  # "a." "I."
+            return False
+        return True
 
     def feed(self, delta: str) -> list[str]:
         self._buf += delta or ""

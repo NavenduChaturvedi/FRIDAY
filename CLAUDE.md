@@ -103,9 +103,14 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
-- **CODE requests are sent without tool declarations** (`Brain.ask`). A coding
-  question rarely needs weather/timers, and 18 tool schemas bloat the prompt —
-  which the 14b code model is slowest to process on CPU.
+- **Only CHAT requests get tool declarations** (`Brain.stream_reply`). The
+  tools are conversational things — "set a timer", "what's the weather",
+  "remind me" — i.e. CHAT phrasing. COMPLEX and CODE are answered from the
+  model's own knowledge; the 18 tool schemas just bloat the prompt, and gemma4
+  (the COMPLEX model) will happily recite the tool list back at you instead of
+  answering. If a genuinely tool-needing question routes to COMPLEX, rephrase
+  it — "what's the weather in X" (CHAT) rather than "why is X's weather like
+  this" (COMPLEX).
 - **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
   `qwen3.5:4b` (chat, 3 GB) stays resident; before loading `gemma4` or
   `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`

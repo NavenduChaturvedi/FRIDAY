@@ -417,10 +417,13 @@ class Brain:
             return
 
         route = classify(user_text)
-        # A coding request rarely needs weather/timers/search, and the tool
-        # schemas bloat the prompt — which the big code model is slowest to
-        # chew through. Skip tools for CODE.
-        toolbox = None if route is Route.CODE else self._toolbox
+        # Only CHAT gets tools. The tools are conversational-assistant things —
+        # "set a timer", "what's the weather", "remind me" — which is CHAT
+        # phrasing. COMPLEX (explain / compare / analyse) and CODE are answered
+        # from the model's own knowledge; handing them 18 tool schemas just
+        # bloats the prompt and, for gemma4, makes it recite the tool list
+        # instead of answering.
+        toolbox = self._toolbox if route is Route.CHAT else None
         system = self._system()
         history = list(self._history)
 
