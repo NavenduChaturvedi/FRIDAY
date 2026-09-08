@@ -15,15 +15,16 @@ The pipeline is strictly linear and synchronous, one turn at a time:
 microphone ──► sounddevice InputStream (16 kHz mono)
             └─► user_input.wav
                 └─► faster-whisper transcribe ──► user_text
-                    └─► Brain.ask()
+                    └─► Brain.stream_reply()   (yields clean sentences)
                         │   router.classify() → CHAT | COMPLEX | CODE
                         │   providers tried in FRIDAY_BRAIN_ORDER (ollama, gemini)
                         │     each picks its model for that route
                         │   tool-call loop: model → Toolbox.call() → result
                         │     → model, up to max_tool_iterations rounds
-                        └─► clean_text_for_speech()
-                            └─► Piper synthesize_wav ──► friday_response.wav
-                                └─► sounddevice playback
+                        │   stream deltas → SentenceStreamer → sentences
+                        └─► Mouth.say(sentence)   (background thread)
+                            └─► Piper synthesize ──► sounddevice playback
+                                (synth of N+1 overlaps playback of N)
 ```
 
 There is **no external framework** — the app is this repo plus the pip
@@ -41,8 +42,8 @@ friday/
   memory.py             MemoryStore — categorised persistent facts, core-block builder
   brain.py              provider chain + per-route model pick + tool loop + history + memory
   toolbox.py            discovers tools/*.py, dispatches calls, queues notifications
-  voice.py              Ears (mic capture + faster-whisper), Mouth (Piper + playback)
-  text.py               clean_text_for_speech — strips markdown/emoji for TTS
+  voice.py              Ears (mic + faster-whisper), Mouth (Piper + threaded playback)
+  text.py               clean_text_for_speech + SentenceStreamer (delta → sentences)
 tools/                   one .py per tool (~18: get_time, calculate, get_weather,
                          web_search, reminder, notes, memory, …) + _template.py
 state/                   notes.json, reminders.json, memory.json — gitignored
@@ -50,7 +51,10 @@ personas/friday/         SOUL.md / MEMORY.md / USER.md — editable personality
 requirements.txt         direct deps, exact pins
 requirements.lock        full transitive lock (pip freeze)
 .env.example             copy to .env; only GEMINI_API_KEY has no default
-test_brain.py            keyboard-only test of the chain + tools
+test_brain.py            keyboard test of the chain + tools (shows streaming)
+test_router.py           classify() cases, no models
+test_memory.py           MemoryStore, no models
+test_text.py             clean_text_for_speech + SentenceStreamer, no models
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
 *.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
@@ -155,8 +159,18 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   `.onnx` + `.onnx.json` pair and `FRIDAY_PIPER_VOICE`. There is no bundled
   Irish voice (FRIDAY's film accent); the US/GB voices in the repo are what
   is available.
-- **Playback reads the wav back from disk** after `synthesize_wav` writes it.
-  Switching to streaming synthesis means changing `Mouth.say`.
+- **Sentence-streaming (`Brain.stream_reply` + `Mouth`).** The brain streams
+  the model's reply and `text.SentenceStreamer` batches deltas into whole
+  sentences; each is cleaned and yielded. `friday.py` feeds them to
+  `Mouth.say()`, which queues them for a background thread — synthesis of
+  sentence N+1 overlaps playback of N (`sd.play` is non-blocking; the worker
+  `sd.wait()`s before the next). `Mouth.wait()` (called before `Ears.listen()`)
+  blocks until the queue drains *and* the last line finishes. Net effect: FRIDAY
+  starts talking well before she's done thinking. No wav file — audio goes
+  straight from Piper to sounddevice. If a provider drops mid-reply after
+  speech has started, the partial is kept (no restart, no double-speak).
+  Gemini doesn't token-stream (it's fast, last in the chain) — it hands the
+  whole reply to the splitter at once.
 - **Persona** is plain markdown under `personas/friday/`. `persona.py`
   length-caps each file and joins them with `---`. `SOUL.md` is required.
 

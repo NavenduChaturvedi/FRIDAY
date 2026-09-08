@@ -57,3 +57,57 @@ def clean_text_for_speech(text: str) -> str:
 
     # Collapse whitespace so Piper reads smoothly.
     return re.sub(r"\s+", " ", text).strip()
+
+
+# A sentence ends on . ! ? … (or a run of them / an ellipsis), optionally
+# followed by a closing quote or bracket, then whitespace. "3.5" and "$1.20"
+# don't match — no space after the dot.
+_SENTENCE_END = re.compile(r'[.!?…]+["\'”’)\]]*(?=\s)')
+
+# Common abbreviations that end in "." but don't end a sentence.
+_ABBREV = {
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
+    "e.g", "i.e", "a.m", "p.m", "approx",
+}
+
+
+class SentenceStreamer:
+    """Feed streamed text deltas in; get whole sentences out, ready for TTS.
+
+    The model produces a reply token by token; this batches those tokens into
+    sentences so speech can start on sentence one while the model is still
+    writing sentence two. Call ``feed`` with each delta and speak whatever it
+    returns; call ``flush`` at the end for the trailing fragment.
+    """
+
+    def __init__(self, min_chars: int = 3) -> None:
+        self._buf = ""
+        self._min = min_chars
+
+    def _is_real_boundary(self, upto: str) -> bool:
+        if len(upto.strip()) < self._min:
+            return False
+        # "... Dr." — last word is an abbreviation, keep going
+        last = re.split(r"[\s(]", upto.rstrip(".!?…\"')]"))[-1].lower()
+        return last not in _ABBREV
+
+    def feed(self, delta: str) -> list[str]:
+        self._buf += delta or ""
+        out: list[str] = []
+        search_from = 0
+        while True:
+            m = _SENTENCE_END.search(self._buf, search_from)
+            if not m:
+                break
+            cut = m.end()
+            if not self._is_real_boundary(self._buf[:cut]):
+                search_from = cut
+                continue
+            out.append(self._buf[:cut].strip())
+            self._buf = self._buf[cut:].lstrip()
+            search_from = 0
+        return out
+
+    def flush(self) -> list[str]:
+        tail, self._buf = self._buf.strip(), ""
+        return [tail] if tail else []

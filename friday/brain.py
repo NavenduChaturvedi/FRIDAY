@@ -3,14 +3,17 @@
 For each turn:
 
 1. ``router.classify()`` sorts the request into CHAT / COMPLEX / CODE.
-2. Providers are tried in ``Config.brain_order`` (default: Ollama, then
-   Gemini). Each provider picks its own model for that route:
-     - Ollama:  qwen3.5:4b (chat) / gemma4 (complex) / qwen2.5-coder:14b (code),
-                with ``ollama_models`` as the fallback list.
-     - Gemini:  ``gemini_model`` (chat) / ``gemini_model_heavy`` (complex+code).
+2. Providers are tried in ``Config.brain_order``. Each picks its model for
+   that route (Ollama: qwen3.5:4b / gemma4 / qwen2.5-coder:14b; Gemini:
+   ``gemini_model`` / ``gemini_model_heavy``).
 3. The chosen model runs a tool-call loop (up to ``max_tool_iterations``).
-4. First provider to return non-empty text wins; only then is the exchange
-   written to history. If all fail, ``BrainError`` — the loop stays alive.
+4. ``stream_reply()`` yields the answer **one clean sentence at a time**, so
+   speech can start before the model has finished writing. The first provider
+   to produce text wins; the full reply is written to history.
+
+If a provider fails before producing anything, the next is tried. If it drops
+*mid-reply*, FRIDAY keeps the partial rather than starting over (and
+double-speaking). If all fail, ``BrainError`` — the loop stays alive.
 """
 
 from __future__ import annotations
@@ -18,12 +21,14 @@ from __future__ import annotations
 import re
 import sys
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from .config import Config
 from .memory import MemoryStore
 from .persona import load_system_prompt
 from .router import Route, classify
+from .text import SentenceStreamer, clean_text_for_speech
 from .toolbox import Toolbox
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
@@ -63,15 +68,21 @@ def _clean(raw: str | None) -> str:
 class Provider:
     name = "provider"
 
-    def generate(
+    def stream(
         self,
         system: str,
         history: list[Turn],
         user_text: str,
         toolbox: Toolbox | None,
         route: Route,
-    ) -> str:
+    ) -> Iterator[str]:
         raise NotImplementedError
+
+    def generate(self, system, history, user_text, toolbox, route) -> str:
+        text = "".join(self.stream(system, history, user_text, toolbox, route))
+        if not text.strip():
+            raise BrainError(f"empty response from {self.name}")
+        return text
 
 
 class GeminiProvider(Provider):
@@ -104,6 +115,11 @@ class GeminiProvider(Provider):
                 ]
             )
         ]
+
+    # Gemini is fast and sits last in the chain — no token streaming, just
+    # hand the whole reply to the sentence splitter at once.
+    def stream(self, system, history, user_text, toolbox, route):
+        yield self.generate(system, history, user_text, toolbox, route)
 
     def generate(self, system, history, user_text, toolbox, route):
         types = self._types
@@ -213,40 +229,61 @@ class OllamaProvider(Provider):
             except Exception:  # noqa: BLE001
                 pass
 
-    def _run_model(self, model, base_messages, tools_arg, toolbox) -> str:
+    def _stream_model(
+        self, model: str, messages: list[dict], tools_arg, toolbox
+    ) -> Iterator[str]:
         self._make_room_for(model)
-        messages = list(base_messages)
-        resp = None
         for _ in range(self._cfg.max_tool_iterations):
-            resp = self._client.chat(
+            content: list[str] = []
+            tool_calls: list = []
+            for chunk in self._client.chat(
                 model=model,
                 messages=messages,
                 tools=tools_arg,
                 think=False,
+                stream=True,
                 keep_alive=self._cfg.ollama_keep_alive,
                 options={
                     "temperature": self._cfg.temperature,
                     "num_predict": self._cfg.max_reply_tokens,
                 },
+            ):
+                delta = chunk.message.content or ""
+                if delta:
+                    content.append(delta)
+                    yield delta
+                if chunk.message.tool_calls:
+                    tool_calls.extend(chunk.message.tool_calls)
+
+            if not tool_calls:
+                return
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "".join(content),
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }
+                        }
+                        for tc in tool_calls
+                    ],
+                }
             )
-            calls = resp.message.tool_calls or []
-            if not calls:
-                break
-            messages.append(resp.message)
-            for call in calls:
-                result = toolbox.call(
-                    call.function.name, dict(call.function.arguments or {})
-                )
+            for tc in tool_calls:
                 messages.append(
                     {
                         "role": "tool",
-                        "content": result,
-                        "tool_name": call.function.name,
+                        "content": toolbox.call(
+                            tc.function.name, dict(tc.function.arguments or {})
+                        ),
+                        "tool_name": tc.function.name,
                     }
                 )
-        return _clean(resp.message.content if resp else None)
 
-    def generate(self, system, history, user_text, toolbox, route):
+    def stream(self, system, history, user_text, toolbox, route):
         base = [{"role": "system", "content": system}]
         base += [{"role": t.role, "content": t.content} for t in history]
         base.append({"role": "user", "content": user_text})
@@ -257,15 +294,24 @@ class OllamaProvider(Provider):
 
         last_error: Exception | None = None
         for i, model in enumerate(order):
+            started = False
             try:
-                text = self._run_model(model, base, tools_arg, toolbox)
-                if text:
-                    if i:
-                        print(f"  brain: (fell back to ollama/{model})")
-                    return text
-                last_error = BrainError(f"{model} returned nothing")
-            except Exception as exc:  # noqa: BLE001 — try the next model
+                for delta in self._stream_model(
+                    model, list(base), tools_arg, toolbox
+                ):
+                    started = True
+                    yield delta
+            except Exception as exc:  # noqa: BLE001
+                if started:
+                    raise  # committed — let Brain keep the partial
                 last_error = exc
+            else:
+                if started:
+                    if i:
+                        print(f"  brain: (used ollama/{model})")
+                    return
+                last_error = BrainError(f"{model} returned nothing")
+
             if i + 1 < len(order):
                 print(
                     f"  brain: ollama/{model} didn't answer ({last_error}); "
@@ -325,10 +371,12 @@ class Brain:
             "`memory` tool."
         )
 
-    def ask(self, user_text: str) -> str:
+    def stream_reply(self, user_text: str) -> Iterator[str]:
+        """Yield the reply one clean, speakable sentence at a time."""
         shortcut = self._try_remember_shortcut(user_text)
         if shortcut is not None:
-            return shortcut
+            yield shortcut
+            return
 
         route = classify(user_text)
         # A coding request rarely needs weather/timers/search, and the tool
@@ -337,23 +385,55 @@ class Brain:
         toolbox = None if route is Route.CODE else self._toolbox
         system = self._system()
         history = list(self._history)
+
         errors: list[str] = []
         for provider in self._providers:
+            splitter = SentenceStreamer()
+            raw: list[str] = []
+            spoke = False
+            dropped = False
             try:
-                reply = provider.generate(
+                for delta in provider.stream(
                     system, history, user_text, toolbox, route
-                )
-            except Exception as exc:  # noqa: BLE001 — fall through to next provider
-                errors.append(f"{provider.name}: {exc}")
+                ):
+                    raw.append(delta)
+                    for sentence in splitter.feed(delta):
+                        clean = clean_text_for_speech(sentence)
+                        if clean:
+                            spoke = True
+                            yield clean
+            except Exception as exc:  # noqa: BLE001
+                if not spoke:
+                    errors.append(f"{provider.name}: {exc}")
+                    print(
+                        f"  brain: {provider.name} failed ({exc}); falling back",
+                        file=sys.stderr,
+                    )
+                    continue
+                dropped = True
                 print(
-                    f"  brain: {provider.name} failed ({exc}); falling back",
+                    f"  brain: {provider.name} dropped mid-reply ({exc})",
                     file=sys.stderr,
                 )
-                continue
-            self._history.append(Turn("user", user_text))
-            self._history.append(Turn("assistant", reply))
-            return reply
+
+            if not dropped:
+                for sentence in splitter.flush():
+                    clean = clean_text_for_speech(sentence)
+                    if clean:
+                        spoke = True
+                        yield clean
+
+            full = _clean("".join(raw))
+            if full:
+                self._history.append(Turn("user", user_text))
+                self._history.append(Turn("assistant", full))
+                return
+            errors.append(f"{provider.name}: empty response")
+
         raise BrainError(" | ".join(errors) or "no providers")
+
+    def ask(self, user_text: str) -> str:
+        return " ".join(self.stream_reply(user_text)).strip()
 
     def reset(self) -> None:
         self._history.clear()

@@ -1,14 +1,22 @@
 """FRIDAY's ears and mouth: microphone capture + STT in, TTS + playback out.
 
 ``Ears.listen()`` blocks until you speak and then go quiet, and returns the
-transcript. ``Mouth.say()`` synthesises a line with Piper and plays it. Both
-load their model once, at construction.
+transcript.
+
+``Mouth.say()`` queues a line and returns immediately; a background thread
+synthesises it with Piper and plays it, so speech for sentence N can start
+while sentence N+1 is still being synthesised (and while the model is still
+writing it). ``Mouth.wait()`` blocks until the queue has drained and the last
+line has finished playing — call it before listening again.
+
+Both load their model once, at construction.
 """
 
 from __future__ import annotations
 
 import queue
 import sys
+import threading
 import time
 import wave
 from pathlib import Path
@@ -19,7 +27,6 @@ import sounddevice as sd
 from .config import Config
 
 _INPUT_WAV = "user_input.wav"
-_OUTPUT_WAV = "friday_response.wav"
 
 
 class Ears:
@@ -124,7 +131,7 @@ class Ears:
 
 
 class Mouth:
-    """Piper synthesis + playback."""
+    """Piper synthesis + playback, pipelined on a background thread."""
 
     def __init__(self, cfg: Config) -> None:
         from piper import PiperVoice
@@ -137,17 +144,47 @@ class Mouth:
             raise FileNotFoundError(f"Piper voice config not found: {config_path}")
 
         self._voice = PiperVoice.load(str(voice_path), config_path=str(config_path))
+        self._rate = int(self._voice.config.sample_rate)
+        self._queue: "queue.Queue[str]" = queue.Queue()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def _run(self) -> None:
+        while True:
+            text = self._queue.get()
+            try:
+                audio = self._synthesize(text)
+                sd.wait()  # let the previous line finish
+                if audio is not None:
+                    sd.play(audio, samplerate=self._rate)
+            except Exception as exc:  # noqa: BLE001 — a TTS hiccup mustn't kill the thread
+                print(f"  tts error: {exc}", file=sys.stderr)
+            finally:
+                self._queue.task_done()
+
+    def _synthesize(self, text: str) -> np.ndarray | None:
+        parts = [
+            chunk.audio_int16_array for chunk in self._voice.synthesize(text)
+        ]
+        return np.concatenate(parts) if parts else None
 
     def say(self, text: str) -> None:
-        text = text.strip()
-        if not text:
-            return
+        """Queue a line to be spoken. Returns immediately."""
+        text = (text or "").strip()
+        if text:
+            self._queue.put(text)
 
-        with wave.open(_OUTPUT_WAV, "wb") as wf:
-            self._voice.synthesize_wav(text, wf)
+    def wait(self) -> None:
+        """Block until everything queued has been spoken."""
+        self._queue.join()
+        sd.wait()
 
-        with wave.open(_OUTPUT_WAV, "rb") as wf:
-            frames = wf.readframes(wf.getnframes())
-            audio = np.frombuffer(frames, dtype=np.int16)
-            sd.play(audio, samplerate=wf.getframerate())
-            sd.wait()
+    def stop(self) -> None:
+        """Drop anything queued and cut off the current line."""
+        try:
+            while True:
+                self._queue.get_nowait()
+                self._queue.task_done()
+        except queue.Empty:
+            pass
+        sd.stop()

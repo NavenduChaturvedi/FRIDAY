@@ -7,10 +7,12 @@ press Ctrl+C) to stop.
 
 The pipeline, one turn at a time:
 
-    mic → faster-whisper → Brain (Gemini → Ollama, with tools)
-        → clean_text_for_speech → Piper → speakers
+    mic → faster-whisper → Brain (routed Ollama/Gemini, with tools)
+        → sentence by sentence → Piper → speakers
 
-Everything is configured from the environment / ``.env`` — see
+The brain streams its reply a sentence at a time and the mouth pipelines
+synthesis with playback, so FRIDAY starts talking before she's finished
+thinking. Everything is configured from the environment / ``.env`` — see
 ``friday/config.py`` and ``.env.example``. Tools live in ``tools/``.
 """
 
@@ -61,6 +63,7 @@ def run() -> int:
         for note in toolbox.drain_notifications():
             print(f"🔔 {note}")
             mouth.say(clean_text_for_speech(note))
+        mouth.wait()
 
         user_text = ears.listen()
         if not user_text:
@@ -69,18 +72,20 @@ def run() -> int:
         print(f"👤 {user_text}")
         if any(phrase in user_text.lower() for phrase in cfg.exit_phrases):
             mouth.say("Powering down. Catch you later.")
+            mouth.wait()
             print("👋 done.")
             return 0
 
+        # Speak each sentence as the brain produces it.
         try:
-            reply = brain.ask(user_text)
+            for sentence in brain.stream_reply(user_text):
+                print(f"🤖 {sentence}")
+                mouth.say(sentence)
         except BrainError as exc:
             print(f"⚠️  brain error: {exc}", file=sys.stderr)
             mouth.say("I lost my train of thought there. Say that again?")
-            continue
 
-        print(f"🤖 {reply}")
-        mouth.say(clean_text_for_speech(reply))
+        mouth.wait()  # let her finish before we start listening again
 
 
 def main() -> int:

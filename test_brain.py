@@ -1,9 +1,10 @@
-"""Brain smoke test: exercise the Gemini -> Ollama chain (with tools) by keyboard.
+"""Brain smoke test: exercise the routed provider chain (with tools) by keyboard.
 
     python test_brain.py
 
-No mic, no speakers. Type at FRIDAY, see which provider answered, whether a
-tool ran, and how long it took. Ctrl+C or an empty line to quit.
+No mic, no speakers. Type at FRIDAY; each reply prints sentence by sentence as
+the brain streams it, with a timestamp — so you can see how soon speech would
+start. Ctrl+C or an empty line to quit.
 """
 
 import sys
@@ -17,7 +18,6 @@ for _s in (sys.stdout, sys.stderr):
 
 from friday.brain import Brain
 from friday.config import Config
-from friday.text import clean_text_for_speech
 from friday.toolbox import Toolbox
 
 cfg = Config()
@@ -40,11 +40,16 @@ while True:
     if not msg:
         break
     started = time.monotonic()
-    reply = brain.ask(msg)
+    first = None
+    for sentence in brain.stream_reply(msg):
+        now = time.monotonic() - started
+        if first is None:
+            first = now
+        print(f"  [{now:5.1f}s] {sentence}")
     for note in toolbox.drain_notifications():
         print(f"  (timer queued: {note!r})")
-    print(f"friday > {reply}")
-    print(
-        f"        [{time.monotonic() - started:.1f}s | "
-        f"spoken: {clean_text_for_speech(reply)!r}]\n"
-    )
+    if first is not None:
+        print(
+            f"        [first sentence {first:.1f}s, "
+            f"done {time.monotonic() - started:.1f}s]\n"
+        )
