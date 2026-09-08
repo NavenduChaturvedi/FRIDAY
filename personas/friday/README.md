@@ -12,11 +12,14 @@ Three files, all read on every launch:
 
 ## Customizing
 
-- Different name? Edit `USER.md`, change "boss" to what you want. Picked up
-  on the next launch.
-- Different pronouns? Same place.
+`USER.md` is fed to the model verbatim, so keep it to plain values — no
+parenthetical hints in the fields (a model will echo them back).
+
+- Want Friday to call you by name? Fill in `Name:` in `USER.md`. Leave it
+  blank and she just talks to you directly.
+- Pronouns / timezone: same file.
 - Want Friday to know something about you (your job, your project, the dog)?
-  Add a line under "Notes" in `USER.md`.
+  Add a line under `Notes:`.
 - Change her voice? That's not a persona thing — set `FRIDAY_PIPER_VOICE` in
   `.env` (see `.env.example`).
 

@@ -72,7 +72,7 @@ class Config:
     # Model per request type (see friday/router.py). The routed model is tried
     # first; ollama_models is the fallback if it's unavailable or fails.
     ollama_model_chat: str = field(
-        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_CHAT", "qwen3.5:4b")
+        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_CHAT", "llama3.1:8b")
     )
     ollama_model_complex: str = field(
         default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_COMPLEX", "gemma4:latest")
@@ -85,7 +85,7 @@ class Config:
     ollama_models: list[str] = field(
         default_factory=lambda: _env_list(
             "FRIDAY_OLLAMA_MODELS",
-            ["qwen3.5:4b", "gemma4:latest", "qwen2.5-coder:14b", "qwen2.5:3b"],
+            ["llama3.1:8b", "qwen2.5:7b", "gemma4:latest", "qwen2.5-coder:14b"],
         )
     )
     ollama_timeout: float = field(

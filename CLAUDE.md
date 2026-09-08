@@ -98,23 +98,23 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   to history.
 - **Per-request model routing (`friday/router.py`).** `classify()` is a
   keyword pass → `CHAT` / `COMPLEX` / `CODE`. Each provider maps the route to a
-  model: Ollama → `ollama_model_{chat,complex,code}` (qwen3.5:4b / gemma4 /
+  model: Ollama → `ollama_model_{chat,complex,code}` (llama3.1:8b / gemma4 /
   qwen2.5-coder:14b), falling back through `ollama_models`; Gemini →
   `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
 - **Tools per route** (`Brain._tools_for`). Each route gets a curated set via
-  `Toolbox.subset()` / `_ToolboxView` — qwen3.5:4b loses track of message
-  roles when handed all 18 schemas (tested: 18 tools → 1/3 correct on a
-  factual+tool question, one answer treating the tool result as the user's
-  message; 5 tools → 3/3 clean). `FRIDAY_CHAT_TOOLS` (~10: time, weather,
+  `Toolbox.subset()` / `_ToolboxView` — a small local model loses track of
+  message roles when handed all 18 schemas (with qwen3.5:4b: 18 tools → 1/3
+  correct on a factual+tool question, one answer treating the tool result as
+  the user's message; 5 tools → 3/3 clean). `FRIDAY_CHAT_TOOLS` (~10: time, weather,
   timer, reminder, notes, memory, web_search, calculate, system_status,
   launch_app), `FRIDAY_COMPLEX_TOOLS` (4: time, weather, web_search,
   wikipedia_lookup). CODE gets none. Set either to `all` once a capable cloud
   model leads. `_ToolboxView.call()` still delegates to the full toolbox, so a
   tool the model somehow names outside its set still runs.
 - **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
-  `qwen3.5:4b` (chat, 3 GB) stays resident; before loading `gemma4` or
+  `llama3.1:8b` (chat, ~5 GB) stays resident; before loading `gemma4` or
   `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`
   unloads the *other* heavy model via `generate(keep_alive=0)`. So at most
   chat + one heavy (~13 GB) are ever loaded. It only unloads models FRIDAY
@@ -133,11 +133,16 @@ Ollama must be running (`ollama serve`) with at least one of the models in
 - **`ollama_timeout` is 150s** — the 14b coder model is slow to load cold.
 - **`<think>…</think>` blocks are stripped** from model output (`brain._clean`)
   and Ollama is called with `think=False`, for reasoning models like qwen3.
+- **`_system(with_tools)`** adds a "call the tool, don't announce it, a tool
+  result is not from the user" block to the prompt when the route has tools —
+  qwen2.5:7b in particular narrates ("I'll do a web search…") and then doesn't.
 - **Reasoning/quality is the model's problem, not the code's.** If answers
-  are weak, reorder `FRIDAY_OLLAMA_MODELS` or set a Gemini key — don't add
-  parsing hacks. (Small local models like `qwen2.5:3b` hold the persona
-  poorly *while using tools* — they list and hedge. Gemini is fine; for the
-  fallback prefer `qwen3.5:4b` / `gemma4`.)
+  are weak, swap the routed model (`FRIDAY_OLLAMA_MODEL_CHAT` etc.) or add a
+  cloud key — don't add parsing hacks. (Chat model history: `qwen3.5:4b`
+  confabulated hard facts → `qwen2.5:7b` was better but code-switched to
+  Chinese and dead-ended on "let me check" → **`llama3.1:8b`**, clean tool use
+  and 4/4 on the Nobel question, just a bit flat on persona. Anything
+  ≤4B holds the persona poorly *while using tools*.)
 - **Tools live in `tools/*.py`**, each a `TOOL` dict (name / description /
   JSON-Schema `parameters`) + a `run(**args) -> str`. `Toolbox` discovers
   them at startup; a bad file is skipped, not fatal. Declarations are

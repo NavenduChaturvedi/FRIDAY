@@ -398,16 +398,25 @@ class Brain:
     def memory(self) -> MemoryStore:
         return self._memory
 
-    def _system(self) -> str:
+    def _system(self, with_tools: bool) -> str:
+        parts = [self._base_system]
+
         core = self._memory.core_block(self._cfg.memory_core_chars)
-        if not core:
-            return self._base_system
-        return (
-            f"{self._base_system}\n\n---\n\n"
-            f"## What you remember about the user\n\n{core}\n\n"
-            "If they ask you to remember, forget, or recall something, use the "
-            "`memory` tool."
-        )
+        if core:
+            parts.append(f"## What you remember about the user\n\n{core}")
+
+        if with_tools:
+            parts.append(
+                "## Tools\n\n"
+                "You have tools. When one would help — the time, weather, a "
+                "search, a calculation, a timer, a reminder, a note, your "
+                "memory — call it straight away. Do not say you are about to "
+                "call it, do not describe what it would return; just call it, "
+                "then answer from the result. A tool result arrives as a "
+                "message from the tool, not from the user."
+            )
+
+        return "\n\n---\n\n".join(parts)
 
     def stream_reply(self, user_text: str) -> Iterator[str]:
         """Yield the reply one clean, speakable sentence at a time."""
@@ -418,7 +427,7 @@ class Brain:
 
         route = classify(user_text)
         toolbox = self._tools_for(route)
-        system = self._system()
+        system = self._system(with_tools=bool(toolbox and len(toolbox)))
         history = list(self._history)
 
         errors: list[str] = []

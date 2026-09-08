@@ -61,7 +61,16 @@ def clean_text_for_speech(text: str) -> str:
     text = _EMOJI.sub("", text)
 
     # Collapse whitespace so Piper reads smoothly.
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # A model that wrapped its whole reply in quotes leaves an unbalanced one
+    # behind once the sentence splitter cuts it up. Drop a lone edge quote.
+    if text[:1] in "\"'“”" and text.count(text[:1]) == 1:
+        text = text[1:].lstrip()
+    if text[-1:] in "\"'“”" and text.count(text[-1:]) == 1:
+        text = text[:-1].rstrip()
+
+    return text
 
 
 # A sentence ends on . ! ? … (or a run of them / an ellipsis), optionally
