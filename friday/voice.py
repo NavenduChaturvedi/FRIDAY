@@ -40,6 +40,7 @@ class Ears:
             cfg.whisper_model,
             device=cfg.whisper_device,
             compute_type=cfg.whisper_compute_type,
+            cpu_threads=cfg.whisper_cpu_threads,
         )
 
     # -- recording ------------------------------------------------------

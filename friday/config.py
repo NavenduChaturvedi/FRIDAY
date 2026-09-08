@@ -147,14 +147,22 @@ class Config:
     )
 
     # --- Speech-to-text (faster-whisper) ---------------------------------
+    # faster-whisper (CTranslate2) is CPU or NVIDIA-CUDA only — it can't use
+    # this laptop's AMD NPU or iGPU. On CPU: tiny ~0.7s, base ~1.3s, small
+    # ~3.8s for a 6s clip. base is the sweet spot; STT isn't the bottleneck.
     whisper_model: str = field(
-        default_factory=lambda: _env_str("FRIDAY_WHISPER_MODEL", "tiny")
+        default_factory=lambda: _env_str("FRIDAY_WHISPER_MODEL", "base")
     )
     whisper_device: str = field(
         default_factory=lambda: _env_str("FRIDAY_WHISPER_DEVICE", "cpu")
     )
     whisper_compute_type: str = field(
         default_factory=lambda: _env_str("FRIDAY_WHISPER_COMPUTE", "int8")
+    )
+    # 0 = let CTranslate2 decide (usually fine). Bump toward the core count
+    # if a bigger model feels sluggish.
+    whisper_cpu_threads: int = field(
+        default_factory=lambda: _env_int("FRIDAY_WHISPER_CPU_THREADS", 0)
     )
 
     # --- Text-to-speech (Piper) ----------------------------------------

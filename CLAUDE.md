@@ -158,9 +158,16 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   model. Heavy testing exhausts it and everything falls to Ollama (which is
   the whole point of the chain, and it works). For real use, a paid key or a
   capable local model.
-- **Whisper model size** is `tiny` by default (`FRIDAY_WHISPER_MODEL`).
+- **Whisper model size** is `base` by default (`FRIDAY_WHISPER_MODEL`).
   Bigger = more accurate, slower, more RAM. First run downloads it from
-  Hugging Face and caches it.
+  Hugging Face and caches it. CPU times for a 6s clip: tiny ~0.7s, base ~1.3s,
+  small ~3.8s — STT is not the bottleneck, the LLM is.
+- **No NPU/GPU for STT.** faster-whisper (CTranslate2) is CPU or NVIDIA-CUDA
+  only. This laptop has an AMD XDNA NPU and a Radeon iGPU; neither is reachable
+  without swapping the STT engine (whisper.cpp+Vulkan for the iGPU, or
+  onnxruntime + AMD Ryzen AI SW for the NPU). Not worth it at these times —
+  don't rabbit-hole on it. Ollama, by contrast, *does* use the iGPU (the user
+  configured that).
 - **`SILENCE_THRESHOLD` (0.03) is mic-dependent.** If the loop never
   triggers or triggers on room noise, tune `FRIDAY_SILENCE_THRESHOLD`. This
   is the most common "it doesn't work". There is also a
