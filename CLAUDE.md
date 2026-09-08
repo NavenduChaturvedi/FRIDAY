@@ -103,14 +103,13 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
-- **Only CHAT requests get tool declarations** (`Brain.stream_reply`). The
-  tools are conversational things — "set a timer", "what's the weather",
-  "remind me" — i.e. CHAT phrasing. COMPLEX and CODE are answered from the
-  model's own knowledge; the 18 tool schemas just bloat the prompt, and gemma4
-  (the COMPLEX model) will happily recite the tool list back at you instead of
-  answering. If a genuinely tool-needing question routes to COMPLEX, rephrase
-  it — "what's the weather in X" (CHAT) rather than "why is X's weather like
-  this" (COMPLEX).
+- **Tools per route** (`Brain.stream_reply`). CHAT sees every enabled tool.
+  COMPLEX sees only `FRIDAY_COMPLEX_TOOLS` (default: `get_time`, `get_weather`,
+  `web_search`, `wikipedia_lookup`) — a "look it up" subset via
+  `Toolbox.subset()` / `_ToolboxView`, small enough that gemma4 doesn't recite
+  the schema list back instead of answering. CODE gets none. The full
+  18-schema list on COMPLEX broke gemma4 (menu recitation) — don't widen it
+  without re-testing that model.
 - **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
   `qwen3.5:4b` (chat, 3 GB) stays resident; before loading `gemma4` or
   `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`

@@ -138,6 +138,13 @@ class Toolbox:
     def declarations(self) -> list[dict]:
         return [t.declaration() for t in self._tools.values()]
 
+    def subset(self, names: list[str] | None) -> "Toolbox | _ToolboxView":
+        """A view exposing only ``names`` to the model (calls still work for
+        any tool). ``None`` returns the full toolbox unchanged."""
+        if names is None:
+            return self
+        return _ToolboxView(self, set(names))
+
     # -- dispatch -------------------------------------------------------
     def call(self, name: str, args: dict) -> str:
         tool = self._tools.get(name)
@@ -170,3 +177,25 @@ class Toolbox:
                 out.append(self.notifications.get_nowait())
             except queue.Empty:
                 return out
+
+
+class _ToolboxView:
+    """A read-through slice of a Toolbox — only some tools are advertised to
+    the model, but ``call`` still delegates to the full toolbox."""
+
+    def __init__(self, parent: Toolbox, names: set[str]) -> None:
+        self._parent = parent
+        self._names = names & set(parent.names)
+
+    def __len__(self) -> int:
+        return len(self._names)
+
+    @property
+    def names(self) -> list[str]:
+        return [n for n in self._parent.names if n in self._names]
+
+    def declarations(self) -> list[dict]:
+        return [d for d in self._parent.declarations() if d["name"] in self._names]
+
+    def call(self, name: str, args: dict) -> str:
+        return self._parent.call(name, args)

@@ -132,6 +132,15 @@ class Config:
     tools_enabled: list[str] = field(
         default_factory=lambda: _env_list("FRIDAY_TOOLS_ENABLED", [])
     )
+    # CHAT requests see every enabled tool. COMPLEX gets only this handful —
+    # enough for "look it up" without the 18-schema prompt bloat that makes
+    # gemma4 recite the tool list. CODE gets none.
+    complex_tools: list[str] = field(
+        default_factory=lambda: _env_list(
+            "FRIDAY_COMPLEX_TOOLS",
+            ["get_time", "get_weather", "web_search", "wikipedia_lookup"],
+        )
+    )
     # Safety stop on a tool-call loop that never settles.
     max_tool_iterations: int = field(
         default_factory=lambda: _env_int("FRIDAY_MAX_TOOL_ITERATIONS", 4)

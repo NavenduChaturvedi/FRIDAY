@@ -417,13 +417,15 @@ class Brain:
             return
 
         route = classify(user_text)
-        # Only CHAT gets tools. The tools are conversational-assistant things —
-        # "set a timer", "what's the weather", "remind me" — which is CHAT
-        # phrasing. COMPLEX (explain / compare / analyse) and CODE are answered
-        # from the model's own knowledge; handing them 18 tool schemas just
-        # bloats the prompt and, for gemma4, makes it recite the tool list
-        # instead of answering.
-        toolbox = self._toolbox if route is Route.CHAT else None
+        # CHAT gets every tool. COMPLEX gets a small "look it up" subset — the
+        # full 18-schema list makes gemma4 recite the menu instead of
+        # answering. CODE gets none (it's answered from the model's knowledge).
+        if route is Route.CHAT or self._toolbox is None:
+            toolbox = self._toolbox
+        elif route is Route.COMPLEX:
+            toolbox = self._toolbox.subset(self._cfg.complex_tools)
+        else:
+            toolbox = None
         system = self._system()
         history = list(self._history)
 
