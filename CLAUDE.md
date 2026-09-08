@@ -225,3 +225,53 @@ never store sensitive data). The "How you talk" section exists because output
 is spoken — no markdown, emoji, or URLs. `MEMORY.md` / `USER.md` are
 hand-written seed facts folded into the prompt; the *living* memory is
 `state/memory.json` (see above). See `personas/README.md`.
+
+## Current state (2026-09-09)
+
+Everything below is committed and pushed to `origin/main`.
+
+**Config as shipped**
+- Brain order `ollama,gemini`. Gemini has a key but the free tier is tiny
+  (~20/day). Ollama leads.
+- **All three routes use `llama3.1:8b`** (~5 GB). Picked over qwen3.5:4b
+  (confabulated), qwen2.5:7b (code-switched to Chinese, dead-ended on tool
+  calls). It's reliable with tools but a bit flat on persona.
+- One model for every route → no reloads. `qwen2.5-coder:14b` and `gemma4`
+  removed from the defaults (14b crashed the Vulkan iGPU; both too big to
+  keep loaded). `qwen3.5:4b` was `ollama rm`'d.
+- Wake word: `filter` mode (name her in the transcript). Porcupine ready if a
+  `PICOVOICE_ACCESS_KEY` is added.
+- Whisper `base` on CPU.
+- User set `OLLAMA_MAX_LOADED_MODELS=1` + `OLLAMA_IGPU_ENABLE=true` +
+  `OLLAMA_LLM_LIBRARY=vulkan` in Ollama's own env.
+
+**Hardware** — AMD Ryzen AI 7 350, Radeon 860M iGPU (Ollama uses it via
+Vulkan), XDNA NPU (unused — faster-whisper can't reach it), ~23 GB usable
+RAM. Smart App Control is **Enforced** and blocks `numpy.random`'s DLL — so
+scipy / scikit-learn / openWakeWord are off the table.
+
+**Open threads**
+- **The mic loop isn't triggering reliably ("not listening").** As of
+  2026-09-09 six orphaned `friday.py` processes were holding the input
+  device; killed them (`Stop-Process` by command line — repeated
+  `python friday.py` boots orphan a venv-launcher + real interpreter pair
+  each time, and `kill $!` from a shell wrapper misses them). Needs a clean
+  retry, then: check the default input device, `FRIDAY_SILENCE_THRESHOLD`
+  (0.03 may be too high for this mic), and mic permissions. A `test_mic.py`
+  RMS meter would help.
+- **Memory is tight.** 23 GB box + a heavy IDE/browser desktop (~13–14 GB
+  baseline) + llama3.1:8b (~5.5 GB via `llama-server`) + the app leaves
+  almost nothing free. `ollama stop llama3.1:8b` frees it between sessions.
+  A smaller chat model or a "release the model on idle" hook may be needed.
+- **Azure OpenAI provider is parked** — built (`AzureProvider`, gpt-4.1-mini)
+  then reverted in `776b69d` because the Azure portal wouldn't cooperate.
+  `git revert 776b69d` restores it; then add `AZURE_OPENAI_API_KEY` +
+  `AZURE_OPENAI_ENDPOINT`. Intended to become the primary provider.
+- Roadmap not yet done: irreversible-action confirmation + undo; a scheduler
+  + morning briefing.
+
+**Running for a smoke test without a mic**: `python test_brain.py` (type at
+it), or the no-model tests (`test_router` / `test_memory` / `test_text` /
+`test_wake`). Booting `friday.py` here always ends at "heard nothing" — the
+agent has no mic. Kill leftover runs with
+`Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? { $_.CommandLine -match 'friday' } | % { Stop-Process $_.ProcessId -Force }`.
