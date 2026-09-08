@@ -98,8 +98,13 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   to history.
 - **Per-request model routing (`friday/router.py`).** `classify()` is a
   keyword pass → `CHAT` / `COMPLEX` / `CODE`. Each provider maps the route to a
-  model: Ollama → `ollama_model_{chat,complex,code}` (llama3.1:8b / gemma4 /
-  qwen2.5-coder:14b), falling back through `ollama_models`; Gemini →
+  model: Ollama → `ollama_model_{chat,complex,code}`, **all `llama3.1:8b` by
+  default** — one model for every route means zero reloads and a ~5 GB
+  footprint on a 25 GB laptop. Override per route
+  (`FRIDAY_OLLAMA_MODEL_COMPLEX=gemma4:latest`,
+  `FRIDAY_OLLAMA_MODEL_CODE=qwen2.5-coder:7b`) if there's headroom.
+  `qwen2.5-coder:14b` crashed the Vulkan iGPU backend on this box. Falls back
+  through `ollama_models`; Gemini →
   `gemini_model` (chat) or `gemini_model_heavy` (complex+code, blank = same).
   A misroute is cheap — wrong-but-capable model, and the fallback still runs.
   The console prints `route → provider/model` each turn.
@@ -114,12 +119,14 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   model leads. `_ToolboxView.call()` still delegates to the full toolbox, so a
   tool the model somehow names outside its set still runs.
 - **Laptop memory guard.** This runs on a 25 GB laptop, not a server.
-  `llama3.1:8b` (chat, ~5 GB) stays resident; before loading `gemma4` or
-  `qwen2.5-coder:14b` (~9–10 GB each), `OllamaProvider._make_room_for()`
-  unloads the *other* heavy model via `generate(keep_alive=0)`. So at most
-  chat + one heavy (~13 GB) are ever loaded. It only unloads models FRIDAY
-  routes to — never anything else you have running. `FRIDAY_OLLAMA_KEEP_ALIVE`
-  (10m) controls lingering.
+  With every route on the same model there are normally no reloads at all.
+  If routes are pointed at different models, `OllamaProvider._make_room_for()`
+  unloads every *other* routed model (`generate(keep_alive=0)`) before loading
+  one, so at most **one** is resident — plus whatever the user runs themselves
+  (never touched). Also set `OLLAMA_MAX_LOADED_MODELS=1` in Ollama's env: unset
+  (default 3) it lets models stack and a 25 GB box hits 99% memory → disk
+  paging → Vulkan iGPU thrash. `FRIDAY_OLLAMA_KEEP_ALIVE` (10m) keeps the model
+  warm between turns.
 - **History is a `deque(maxlen=history_turns*2)`** of `Turn(role, content)`,
   in memory only, cleared on restart or `Brain.reset()`.
 - **Persistent memory (`friday/memory.py`).** `state/memory.json`, categorised

@@ -206,12 +206,14 @@ class OllamaProvider(Provider):
         if not self._available:
             raise BrainError(f"Ollama at {cfg.ollama_host} has no models")
 
-        # The big models. Before loading one, unload any other — so a laptop
-        # only ever holds the chat model plus one heavy model.
-        self._heavy = {
+        # The models FRIDAY routes to. Before loading one, unload the others —
+        # so this 25 GB laptop only ever holds one of them at a time (plus
+        # whatever the user is running themselves, which is left alone).
+        self._managed = {
+            cfg.ollama_model_chat,
             cfg.ollama_model_complex,
             cfg.ollama_model_code,
-        } - {cfg.ollama_model_chat}
+        }
 
     def _model_order(self, route: Route) -> list[str]:
         routed = self._cfg.ollama_model_for(route.value)
@@ -228,15 +230,13 @@ class OllamaProvider(Provider):
         ]
 
     def _make_room_for(self, model: str) -> None:
-        """Keep the laptop to chat-model + one heavy model. Unload the rest of
-        ours; never touch a model FRIDAY doesn't manage."""
-        if model not in self._heavy:
-            return
+        """Unload the other models FRIDAY routes to, so at most one is resident.
+        Never touches a model the user is running themselves."""
         try:
             loaded = {m.model for m in self._client.ps().models}
         except Exception:  # noqa: BLE001
             return
-        for other in (loaded & self._heavy) - {model}:
+        for other in (loaded & self._managed) - {model}:
             try:
                 self._client.generate(model=other, keep_alive=0)
                 print(f"  brain: unloaded ollama/{other} to free memory")

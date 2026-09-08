@@ -74,18 +74,24 @@ class Config:
     ollama_model_chat: str = field(
         default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_CHAT", "llama3.1:8b")
     )
+    # Same as chat by default — on a 25 GB laptop, a separate 9.6 GB model for
+    # COMPLEX means every chat<->complex switch is a reload. Point this at
+    # gemma4:latest if you have the headroom and want the bigger model.
     ollama_model_complex: str = field(
-        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_COMPLEX", "gemma4:latest")
+        default_factory=lambda: _env_str("FRIDAY_OLLAMA_MODEL_COMPLEX", "llama3.1:8b")
     )
+    # Also llama3.1:8b by default — qwen2.5-coder:14b crashed the Vulkan iGPU
+    # backend on this box, and one model for every route means zero reloads.
+    # Point this at qwen2.5-coder:7b (or :14b, on CPU) for real coding work.
     ollama_model_code: str = field(
         default_factory=lambda: _env_str(
-            "FRIDAY_OLLAMA_MODEL_CODE", "qwen2.5-coder:14b"
+            "FRIDAY_OLLAMA_MODEL_CODE", "llama3.1:8b"
         )
     )
     ollama_models: list[str] = field(
         default_factory=lambda: _env_list(
             "FRIDAY_OLLAMA_MODELS",
-            ["llama3.1:8b", "qwen2.5:7b", "gemma4:latest", "qwen2.5-coder:14b"],
+            ["llama3.1:8b", "qwen2.5:7b", "gemma4:latest"],
         )
     )
     ollama_timeout: float = field(
