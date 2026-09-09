@@ -160,8 +160,9 @@ class Config:
         default_factory=lambda: _env_list(
             "FRIDAY_CHAT_TOOLS",
             [
-                "get_time", "get_weather", "set_timer", "reminder", "notes",
-                "memory", "web_search", "calculate", "system_status", "launch_app",
+                "get_time", "get_weather", "set_timer", "reminder", "schedule",
+                "notes", "memory", "web_search", "calculate", "system_status",
+                "launch_app",
             ],
         )
     )
@@ -185,6 +186,22 @@ class Config:
     # Where tools keep local state (notes, reminders).
     state_dir: str = field(
         default_factory=lambda: _env_str("FRIDAY_STATE_DIR", "state")
+    )
+
+    # --- Scheduler / morning briefing (tools/schedule.py) --------------
+    # The city the morning briefing reads weather for. Blank -> no weather line.
+    home_city: str = field(
+        default_factory=lambda: _env_str("FRIDAY_HOME_CITY", "")
+    )
+    # Add a couple of news headlines to the briefing (one extra network call).
+    briefing_news: bool = field(
+        default_factory=lambda: _env_bool("FRIDAY_BRIEFING_NEWS", False)
+    )
+    # A non-briefing scheduled job that's more than this many minutes late
+    # (FRIDAY was off when it was due) is skipped rather than fired stale. The
+    # briefing itself always fires — it's still useful late in the morning.
+    schedule_grace_minutes: int = field(
+        default_factory=lambda: _env_int("FRIDAY_SCHEDULE_GRACE_MINUTES", 120)
     )
 
     # --- Persona -------------------------------------------------------

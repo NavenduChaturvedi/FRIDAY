@@ -151,8 +151,14 @@ class Toolbox:
             self._tools[tool.name] = tool
             on_load = getattr(tool.module, "on_load", None)
             if callable(on_load):
+                # on_load(notify); a hook that also declares `toolbox` in its
+                # signature gets this Toolbox too (schedule.py composes the
+                # briefing by calling read-only tools).
+                extra = {}
+                if "toolbox" in inspect.signature(on_load).parameters:
+                    extra["toolbox"] = self
                 try:
-                    on_load(self.notifications.put)
+                    on_load(self.notifications.put, **extra)
                 except Exception as exc:  # noqa: BLE001 — a bad hook mustn't sink startup
                     self._skipped.append(f"{tool.source} on_load: {exc}")
 

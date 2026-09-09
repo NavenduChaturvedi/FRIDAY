@@ -46,9 +46,9 @@ friday/
   voice.py              Ears (mic + faster-whisper), Mouth (Piper + threaded playback)
   wake.py               wake-word gate — Porcupine, or a transcript filter
   text.py               clean_text_for_speech + SentenceStreamer (delta → sentences)
-tools/                   one .py per tool (~18: get_time, calculate, get_weather,
-                         web_search, reminder, notes, memory, …) + _template.py
-state/                   notes.json, reminders.json, memory.json — gitignored
+tools/                   one .py per tool (~19: get_time, calculate, get_weather,
+                         web_search, reminder, schedule, notes, memory, …) + _template.py
+state/                   notes.json, reminders.json, memory.json, schedule.json — gitignored
 personas/friday/         SOUL.md / MEMORY.md / USER.md — editable personality
 requirements.txt         direct deps, exact pins
 requirements.lock        full transitive lock (pip freeze)
@@ -59,6 +59,7 @@ test_memory.py           MemoryStore, no models
 test_text.py             clean_text_for_speech + SentenceStreamer, no models
 test_wake.py             wake-word addressed()/strip() filter, no models
 test_confirm.py          confirm gate + undo, stub provider, no models
+test_schedule.py         scheduler + morning briefing, stub toolbox, no models
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
 *.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
@@ -179,9 +180,11 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   the message is queued on `Toolbox.notifications` and the main loop drains it
   at the top of the next turn — so it's only *heard* when you next speak to
   her. A tool module can also define `on_load(notify)`, run once at startup
-  for a background checker (`set_reminder` does this). Tools that persist
-  state write to `Config.state_path` (`state/`, gitignored). See
-  `tools/README.md`.
+  for a background checker (`set_reminder` does this) — add a `toolbox` param
+  (`on_load(notify, toolbox=None)`) and it's handed the `Toolbox` too, so the
+  checker can call other tools (`schedule` builds the briefing that way).
+  Tools that persist state write to `Config.state_path` (`state/`,
+  gitignored). See `tools/README.md`.
 - **Destructive-action gate + undo (`friday/toolbox.py` + `Brain`).** A tool
   declares `TOOL["confirm"]` (`True` or `{param: [values]}`) and/or
   `TOOL["mutates"]` (same shape — the *writing* actions only). On a confirmed
@@ -201,6 +204,20 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   it; `reminder` stays out of undo — its background checker holds state the
   snapshot can't see. Both providers route through `Toolbox.call()`, so the
   gate is provider-agnostic.
+- **Scheduler + morning briefing (`tools/schedule.py`).** Recurring cousin of
+  `reminder`. Jobs in `state/schedule.json` (`time` `HH:MM`, `repeat`
+  daily/weekdays/weekends/once, `task`), CRUD via the `schedule` tool; an
+  `on_load(notify, toolbox)` thread `_tick()`s every 30 s. `_due()` →
+  `fire` / `skip` (mark done, don't speak — a plain job more than
+  `FRIDAY_SCHEDULE_GRACE_MINUTES` late) / `expire` (a past `once`) / `no`;
+  `last_run` (a date) stops same-day re-fires. A fired job queues a
+  notification, so — like a reminder — it's **only spoken on the next turn**.
+  `task="briefing"` runs `_compose_briefing()`: a plain template (no LLM, so
+  it works with the model unloaded) — time, `get_weather` for
+  `FRIDAY_HOME_CITY`, today's `reminder`s and `notes` read straight from
+  `state/`, and `get_news` if `FRIDAY_BRIEFING_NEWS`. It reaches those tools
+  through the `toolbox` passed to `on_load`. `schedule.json` is deliberately
+  out of the undo snapshot (the checker writes it from its own thread).
 - **Gemini free tier is stingy** — ~5 req/min and ~20 req/day on the flash
   model. Heavy testing exhausts it and everything falls to Ollama (which is
   the whole point of the chain, and it works). For real use, a paid key or a
@@ -272,6 +289,10 @@ Everything below is committed and pushed to `origin/main`.
 - Wake word: `filter` mode (name her in the transcript). Porcupine ready if a
   `PICOVOICE_ACCESS_KEY` is added.
 - Whisper `base` on CPU.
+- Destructive-action confirm gate **on** (`FRIDAY_CONFIRM_ACTIONS`); idle
+  model unload at 180 s (`FRIDAY_OLLAMA_IDLE_UNLOAD`).
+- Scheduler live; `schedule` in the CHAT tool set (now 11). `FRIDAY_HOME_CITY`
+  unset — the morning briefing skips the weather line until it's set.
 - User set `OLLAMA_MAX_LOADED_MODELS=1` + `OLLAMA_IGPU_ENABLE=true` +
   `OLLAMA_LLM_LIBRARY=vulkan` in Ollama's own env.
 
@@ -305,10 +326,14 @@ scipy / scikit-learn / openWakeWord are off the table.
   `memory forget` now ask first; "undo" / "undo that" reverses the last
   `state/` change. Mechanism (`TOOL["confirm"]` / `["mutates"]`) is ready for
   a future `delete_file` / `send_message`.
-- Roadmap not yet done: a scheduler + morning briefing.
+- Scheduler + morning briefing — **done** (`tools/schedule.py`, see the
+  architecture note). `schedule` tool for recurring jobs;
+  `task="briefing"` speaks the morning rundown on the first turn after it's
+  due. Set `FRIDAY_HOME_CITY` for the weather line. That clears the roadmap —
+  remaining open threads are the mic loop and the parked Azure provider.
 
 **Running for a smoke test without a mic**: `python test_brain.py` (type at
 it), or the no-model tests (`test_router` / `test_memory` / `test_text` /
-`test_wake` / `test_confirm`). Booting `friday.py` here always ends at "heard nothing" — the
+`test_wake` / `test_confirm` / `test_schedule`). Booting `friday.py` here always ends at "heard nothing" — the
 agent has no mic. Kill leftover runs with
 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? { $_.CommandLine -match 'friday' } | % { Stop-Process $_.ProcessId -Force }`.

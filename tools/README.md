@@ -33,7 +33,10 @@ def run(timezone: str = "") -> str:
   whatever you pass it is spoken at the start of the next turn.
 - Need to run something from startup (a background checker), not just when
   called? Define `on_load(notify)` at module level — it's called once at
-  launch for enabled tools. `set_reminder.py` uses this.
+  launch for enabled tools. `set_reminder.py` uses this. Add a `toolbox`
+  parameter (`on_load(notify, toolbox=None)`) to also receive the `Toolbox`,
+  so the checker can call other tools — `schedule.py` builds the briefing
+  that way.
 
 ## Destructive actions
 
@@ -79,7 +82,8 @@ Both take `True` (every call) or `{param: [values]}` (only matching calls).
 | Tool | What it does |
 |---|---|
 | `set_timer` | countdown; announces itself when it fires (not saved) |
-| `reminder` | time-based reminder; **survives restart**, checked in the background |
+| `reminder` | one-shot time-based reminder; **survives restart**, checked in the background |
+| `schedule` | **recurring** jobs (daily/weekdays/…); `task="briefing"` reads the morning rundown. Survives restart. |
 | `notes` | transient scratchpad — add / list / remove / clear |
 | `memory` | durable facts about the user; feeds the system prompt (remember / recall / forget / list) |
 | `open_url` | open a web page in the default browser |
@@ -101,8 +105,13 @@ All tools in this directory are on by default. To run a subset, set
 
 ## Notes
 
-- Timers and reminders fire on schedule but are only *spoken* on FRIDAY's
-  next turn (when you next talk to her).
+- Timers, reminders and scheduled jobs fire on time but are only *spoken* on
+  FRIDAY's next turn (when you next talk to her).
+- `schedule`'s morning briefing is a plain template (`_compose_briefing`) —
+  time, `get_weather` for `FRIDAY_HOME_CITY`, today's `reminder`s, `notes`,
+  optional `get_news`. No LLM, so it works with the model unloaded. It reaches
+  the other tools via the `toolbox` its `on_load(notify, toolbox=None)` is
+  handed.
 - `set_timer` is in-process and gone on restart; `reminder` is written to
   `state/` and survives.
 - The acting tools here are reversible or low-stakes (open an app, set the
