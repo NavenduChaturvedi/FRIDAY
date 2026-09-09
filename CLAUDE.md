@@ -58,6 +58,7 @@ test_router.py           classify() cases, no models
 test_memory.py           MemoryStore, no models
 test_text.py             clean_text_for_speech + SentenceStreamer, no models
 test_wake.py             wake-word addressed()/strip() filter, no models
+test_confirm.py          confirm gate + undo, stub provider, no models
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
 *.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
@@ -181,6 +182,25 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   for a background checker (`set_reminder` does this). Tools that persist
   state write to `Config.state_path` (`state/`, gitignored). See
   `tools/README.md`.
+- **Destructive-action gate + undo (`friday/toolbox.py` + `Brain`).** A tool
+  declares `TOOL["confirm"]` (`True` or `{param: [values]}`) and/or
+  `TOOL["mutates"]` (same shape — the *writing* actions only). On a confirmed
+  call `Toolbox.call()` doesn't run it: it parks `PendingCall(name, args,
+  prompt)` and returns a string telling the model to voice the question. The
+  turn ends. Next turn, `Brain.stream_reply` (before `classify`, like the
+  `_REMEMBER` shortcut) checks `toolbox.pending`: `_CONFIRM_YES` → run it via
+  `resolve_pending(True)`; `_CONFIRM_NO` → drop with an ack; neither → drop
+  silently and handle the turn normally (so a parked call never goes stale
+  past one turn). If the model called the tool but never actually asked (no
+  `?` in its reply), `stream_reply` appends the parked `prompt` itself — the
+  safety backstop. Before any `mutates` call, `state/*.json` is snapshotted
+  one level deep (in memory); `_UNDO` ("undo" / "undo that") restores it via
+  `undo_last()`. `confirm_prompt(**args)` in the tool module supplies the
+  phrasing. `FRIDAY_CONFIRM_ACTIONS=false` disables the gate (undo still
+  works). `notes` (confirm on `clear`) and `memory` (confirm on `forget`) use
+  it; `reminder` stays out of undo — its background checker holds state the
+  snapshot can't see. Both providers route through `Toolbox.call()`, so the
+  gate is provider-agnostic.
 - **Gemini free tier is stingy** — ~5 req/min and ~20 req/day on the flash
   model. Heavy testing exhausts it and everything falls to Ollama (which is
   the whole point of the chain, and it works). For real use, a paid key or a
@@ -280,11 +300,15 @@ scipy / scikit-learn / openWakeWord are off the table.
   then reverted in `776b69d` because the Azure portal wouldn't cooperate.
   `git revert 776b69d` restores it; then add `AZURE_OPENAI_API_KEY` +
   `AZURE_OPENAI_ENDPOINT`. Intended to become the primary provider.
-- Roadmap not yet done: irreversible-action confirmation + undo; a scheduler
-  + morning briefing.
+- Irreversible-action confirmation + undo — **done** (see the
+  "Destructive-action gate + undo" architecture note). `notes clear` /
+  `memory forget` now ask first; "undo" / "undo that" reverses the last
+  `state/` change. Mechanism (`TOOL["confirm"]` / `["mutates"]`) is ready for
+  a future `delete_file` / `send_message`.
+- Roadmap not yet done: a scheduler + morning briefing.
 
 **Running for a smoke test without a mic**: `python test_brain.py` (type at
 it), or the no-model tests (`test_router` / `test_memory` / `test_text` /
-`test_wake`). Booting `friday.py` here always ends at "heard nothing" — the
+`test_wake` / `test_confirm`). Booting `friday.py` here always ends at "heard nothing" — the
 agent has no mic. Kill leftover runs with
 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? { $_.CommandLine -match 'friday' } | % { Stop-Process $_.ProcessId -Force }`.

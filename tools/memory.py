@@ -47,9 +47,28 @@ TOOL = {
         },
         "required": ["action"],
     },
+    # 'forget' deletes by fuzzy match — it can take more than the user expects,
+    # so confirm it. Snapshotted, so "undo that" brings the facts back.
+    "confirm": {"action": ["forget"]},
+    "mutates": {"action": ["remember", "forget"]},
 }
 
 _STORE = MemoryStore(Config().memory_path)
+
+
+def confirm_prompt(action: str = "", query: str = "", **_: object) -> str:
+    if (action or "").strip().lower() != "forget":
+        return ""
+    query = (query or "").strip()
+    if not query:
+        return "I'd need to know what to forget."
+    hits = _STORE.search(query, limit=20)
+    matches = [h for h in hits if query.lower() in h.value.lower()]
+    if not matches:
+        return f"Nothing I remember matches {query!r}, so there's nothing to forget."
+    if len(matches) == 1:
+        return f"That deletes one thing I remember: {matches[0].value}."
+    return f"That deletes {len(matches)} things I remember about {query!r}."
 
 
 def run(action: str = "list", fact: str = "", category: str = "misc", query: str = "") -> str:

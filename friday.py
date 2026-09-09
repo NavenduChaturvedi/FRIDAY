@@ -48,7 +48,7 @@ def run() -> int:
     print("Waking F.R.I.D.A.Y. …")
     print(f"  {cfg.summary()}")
 
-    toolbox = Toolbox(cfg.tools_path, cfg.tools_enabled)
+    toolbox = Toolbox(cfg.tools_path, cfg.tools_enabled, confirm=cfg.confirm_actions)
     if toolbox.names:
         print(f"  tools: {', '.join(toolbox.names)}")
     for skip in toolbox.skipped:

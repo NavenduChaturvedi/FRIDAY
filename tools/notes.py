@@ -34,10 +34,23 @@ TOOL = {
         },
         "required": ["action"],
     },
+    # 'clear' wipes the whole scratchpad — ask first. Every write is snapshotted
+    # so "undo that" works for 'add' and 'remove' too.
+    "confirm": {"action": ["clear"]},
+    "mutates": {"action": ["add", "remove", "clear"]},
 }
 
 _PATH = Config().state_path / "notes.json"
 _lock = Lock()
+
+
+def confirm_prompt(action: str = "", **_: object) -> str:
+    if (action or "").strip().lower() == "clear":
+        n = len(_load())
+        if n:
+            return f"That clears all {n} note{'s' if n != 1 else ''} for good."
+        return "Your scratchpad's already empty."
+    return ""
 
 
 def _load() -> list[dict]:

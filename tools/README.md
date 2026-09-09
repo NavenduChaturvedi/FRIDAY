@@ -35,6 +35,33 @@ def run(timezone: str = "") -> str:
   called? Define `on_load(notify)` at module level — it's called once at
   launch for enabled tools. `set_reminder.py` uses this.
 
+## Destructive actions
+
+If a tool can lose data or do something outward-facing, gate it in the `TOOL`
+dict:
+
+```python
+TOOL = {
+    ...
+    "confirm": {"action": ["clear"]},          # or  "confirm": True
+    "mutates": {"action": ["add", "clear"]},   # or  "mutates": True
+}
+
+def confirm_prompt(action="", **_) -> str:      # optional — the spoken phrasing
+    return "That wipes all your notes for good." if action == "clear" else ""
+```
+
+- **`confirm`** — FRIDAY parks the call, tells the user what it will do, and
+  runs it only if the *next* turn is a clear "yes". "no" (or anything
+  unrelated) drops it. Disable the whole gate with `FRIDAY_CONFIRM_ACTIONS=false`.
+- **`mutates`** — before the call, `state/` is snapshotted (one level).
+  "undo" / "undo that" restores it. List the *writing* actions only, not
+  reads, or every `list` will clobber the undo point.
+
+Both take `True` (every call) or `{param: [values]}` (only matching calls).
+`notes` and `memory` already use this; copy their shape for a `delete_file` or
+`send_message`.
+
 ## Bundled
 
 **Answers & lookups**
@@ -78,10 +105,9 @@ All tools in this directory are on by default. To run a subset, set
   next turn (when you next talk to her).
 - `set_timer` is in-process and gone on restart; `reminder` is written to
   `state/` and survives.
-- Every acting tool here is reversible or low-stakes (open an app, set the
-  clipboard, write a note). A real confirmation gate for irreversible actions
-  is still on the roadmap — don't add a tool that deletes or sends without
-  one.
+- The acting tools here are reversible or low-stakes (open an app, set the
+  clipboard, write a note). Anything that deletes or sends must set `confirm`
+  (see "Destructive actions" above) — don't ship one without it.
 - Extra packages some tools need (all in `requirements.txt`): `ddgs`
   (`web_search`, `get_news`), `tzdata` (`get_time` on Windows), `psutil`
   (`system_status`), `pyperclip` (`clipboard`), `dateparser` (`reminder`).

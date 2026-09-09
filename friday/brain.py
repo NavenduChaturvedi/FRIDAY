@@ -45,6 +45,27 @@ _REMEMBER = re.compile(
     re.IGNORECASE,
 )
 
+# Answers to "…shall I go ahead?" when a destructive tool call is parked. A
+# clear yes runs it; a clear no drops it; anything else means the user has
+# moved on, so the parked call is dropped and the turn handled normally.
+_CONFIRM_YES = re.compile(
+    r"^(?:friday[,\s]+)?(?:yes|yeah|yep|yup|ya|sure|ok|okay|okey|"
+    r"do it|go ahead|go for it|please do|please|confirm(?:ed)?|"
+    r"affirmative|proceed|that'?s right|correct|absolutely|definitely)\b",
+    re.IGNORECASE,
+)
+_CONFIRM_NO = re.compile(
+    r"^(?:friday[,\s]+)?(?:no|nope|nah|don'?t|do not|stop|cancel|abort|"
+    r"forget it|leave it|never\s?mind|hold on|wait)\b",
+    re.IGNORECASE,
+)
+# "undo that" / "undo the last thing" — reverse the last state change.
+_UNDO = re.compile(
+    r"^(?:friday[,\s]+)?(?:can you\s+|could you\s+|please\s+)?"
+    r"undo(?:\s+(?:that|it|this|the\s+last(?:\s+\w+)?))?[.!?\s]*$",
+    re.IGNORECASE,
+)
+
 
 class BrainError(RuntimeError):
     """Raised when no provider could produce a reply."""
@@ -440,6 +461,18 @@ class Brain:
             yield shortcut
             return
 
+        # A destructive tool call parked last turn? This turn's yes/no decides
+        # it — and if it's neither, the parked call is dropped here.
+        decided = self._resolve_pending(user_text)
+        if decided is not None:
+            yield decided
+            return
+
+        undo = self._try_undo(user_text)
+        if undo is not None:
+            yield undo
+            return
+
         route = classify(user_text)
         toolbox = self._tools_for(route)
         system = self._system(with_tools=bool(toolbox and len(toolbox)))
@@ -484,8 +517,18 @@ class Brain:
 
             full = _clean("".join(raw))
             if full:
-                self._history.append(Turn("user", user_text))
-                self._history.append(Turn("assistant", full))
+                # A destructive call got parked this turn but the model never
+                # actually put the question to the user — ask it ourselves so
+                # the parked call can't just sit there silently.
+                box = self._toolbox
+                if box is not None and box.pending is not None and "?" not in full:
+                    ask = clean_text_for_speech(
+                        f"{box.pending.prompt} Shall I go ahead?"
+                    )
+                    if ask:
+                        yield ask
+                        full = f"{full} {ask}"
+                self._remember_turn(user_text, full)
                 return
             errors.append(f"{provider.name}: empty response")
 
@@ -526,6 +569,12 @@ class Brain:
 
     def reset(self) -> None:
         self._history.clear()
+        if self._toolbox is not None:
+            self._toolbox.clear_pending()
+
+    def _remember_turn(self, user_text: str, reply: str) -> None:
+        self._history.append(Turn("user", user_text))
+        self._history.append(Turn("assistant", reply))
 
     def _try_remember_shortcut(self, user_text: str) -> str | None:
         m = _REMEMBER.match(user_text.strip())
@@ -536,6 +585,34 @@ class Brain:
             return None
         self._memory.add(fact, "misc")
         reply = "Got it. That's in memory now."
-        self._history.append(Turn("user", user_text))
-        self._history.append(Turn("assistant", reply))
+        self._remember_turn(user_text, reply)
+        return reply
+
+    def _resolve_pending(self, user_text: str) -> str | None:
+        """Turn after a destructive call was parked: run it on a clear yes,
+        drop it on a clear no, and on anything else drop it and return None so
+        the turn is handled normally."""
+        box = self._toolbox
+        if box is None or box.pending is None:
+            return None
+        text = user_text.strip()
+        if _CONFIRM_YES.match(text):
+            reply = clean_text_for_speech(box.resolve_pending(True)) or "Done."
+            self._remember_turn(user_text, reply)
+            return reply
+        if _CONFIRM_NO.match(text):
+            box.resolve_pending(False)
+            reply = "Okay — I'll leave that alone."
+            self._remember_turn(user_text, reply)
+            return reply
+        box.clear_pending()
+        return None
+
+    def _try_undo(self, user_text: str) -> str | None:
+        if not _UNDO.match(user_text.strip()):
+            return None
+        box = self._toolbox
+        restored = box.undo_last() if box is not None else None
+        reply = restored or "There's nothing for me to undo."
+        self._remember_turn(user_text, reply)
         return reply

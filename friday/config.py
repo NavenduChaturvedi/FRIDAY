@@ -33,6 +33,13 @@ def _env_int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_list(name: str, default: list[str]) -> list[str]:
     raw = os.getenv(name, "")
     items = [x.strip() for x in raw.split(",") if x.strip()]
@@ -167,6 +174,13 @@ class Config:
     # Safety stop on a tool-call loop that never settles.
     max_tool_iterations: int = field(
         default_factory=lambda: _env_int("FRIDAY_MAX_TOOL_ITERATIONS", 4)
+    )
+    # Gate destructive tool calls (a tool with "confirm" in its TOOL dict)
+    # behind a spoken "are you sure?" — FRIDAY asks, and only runs the action
+    # if the *next* turn is a clear yes. Off = destructive tools fire straight
+    # away (undo still works). See friday/toolbox.py.
+    confirm_actions: bool = field(
+        default_factory=lambda: _env_bool("FRIDAY_CONFIRM_ACTIONS", True)
     )
     # Where tools keep local state (notes, reminders).
     state_dir: str = field(

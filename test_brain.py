@@ -23,7 +23,7 @@ from friday.toolbox import Toolbox
 cfg = Config()
 print(cfg.summary())
 
-toolbox = Toolbox(cfg.tools_path, cfg.tools_enabled)
+toolbox = Toolbox(cfg.tools_path, cfg.tools_enabled, confirm=cfg.confirm_actions)
 print(f"tools: {', '.join(toolbox.names) or '(none)'}")
 for skip in toolbox.skipped:
     print(f"  skipped — {skip}")

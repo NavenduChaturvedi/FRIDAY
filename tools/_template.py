@@ -20,6 +20,12 @@ TOOL = {
         },
         "required": [],  # list the properties the model MUST supply
     },
+    # If this tool can lose data or act outward (delete, send, overwrite), gate
+    # it. "confirm" makes FRIDAY ask out loud first; "mutates" snapshots state/
+    # so "undo" works. Each is True (every call) or {param: [values]}. See
+    # tools/README.md and notes.py / memory.py.
+    # "confirm": {"action": ["clear"]},
+    # "mutates": {"action": ["add", "clear"]},
 }
 
 
@@ -34,3 +40,8 @@ def run(example: str = "") -> str:
     at the start of the next turn.
     """
     return f"Did the thing with {example!r}."
+
+
+# Optional: the spoken phrasing for a "confirm"ed call — return "" to skip.
+# def confirm_prompt(example: str = "", **_: object) -> str:
+#     return f"That will do the thing with {example!r}, for good."
