@@ -35,7 +35,8 @@ that has been removed entirely.)
 ## Layout
 
 ```
-friday.py               entrypoint + the conversational loop
+friday.py               entrypoint + the conversational loop (console)
+friday_ui.py             entrypoint + a Tkinter control panel over the same pipeline
 friday/
   config.py             every setting, read once from env / .env (Config dataclass)
   persona.py            loads personas/<name>/*.md into the system prompt
@@ -60,8 +61,12 @@ test_text.py             clean_text_for_speech + SentenceStreamer, no models
 test_wake.py             wake-word addressed()/strip() filter, no models
 test_confirm.py          confirm gate + undo, stub provider, no models
 test_schedule.py         scheduler + morning briefing, stub toolbox, no models
+test_ui.py               friday_ui worker queue protocol + window smoke, no models
 test_whisper.py          STT smoke test (records 20 s)
 test_piper.py            TTS smoke test (one sentence)
+scripts/make_icon.py     regenerates assets/friday.ico (stdlib, run once)
+scripts/install-shortcut.ps1  puts a Desktop shortcut (UI, or -Console / -Uninstall)
+assets/friday.ico        app icon (cyan ring), used by the shortcut
 *.onnx / *.onnx.json     Piper voice model (git-LFS tracked)
 *.wav                    runtime artifacts, gitignored, safe to delete
 ```
@@ -78,13 +83,18 @@ pip install -r requirements.txt
 
 cp .env.example .env                 # add GEMINI_API_KEY (optional)
 
-python friday.py                     # the voice loop (needs mic + speakers)
+python friday.py                     # the console voice loop (needs mic + speakers)
+python friday_ui.py                  # the same, with a Tkinter control panel
+pythonw friday_ui.py                 # …no console window (what the Desktop shortcut runs)
 python test_brain.py                 # brain only, type at it, no audio
 python test_piper.py                 # TTS only
 python test_whisper.py               # STT only
+
+powershell -ExecutionPolicy Bypass -File scripts/install-shortcut.ps1   # Desktop shortcut
 ```
 
-Stop the loop by saying "goodbye Friday" / "exit loop", or Ctrl+C.
+Stop the loop by saying "goodbye Friday" / "exit loop", or Ctrl+C (console) /
+the Quit button (UI).
 
 Without `GEMINI_API_KEY` the app runs fine — it just goes straight to Ollama.
 Ollama must be running (`ollama serve`) with at least one of the models in
@@ -263,6 +273,24 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   whole reply to the splitter at once.
 - **Persona** is plain markdown under `personas/friday/`. `persona.py`
   length-caps each file and joins them with `---`. `SOUL.md` is required.
+- **Desktop UI (`friday_ui.py`).** A second entrypoint — a small Tkinter
+  control panel — over the *same* `friday/` components; `friday.py` is
+  untouched. `Worker(threading.Thread)` runs a port of the console turn loop;
+  `App(tk.Tk)` is the window. They talk through two `queue.Queue`s: `ui_q`
+  (worker→UI: `state` / `transcript` / `level` / `notice` / `ready` /
+  `threshold` / `closed`) and `cmd_q` (UI→worker: `text` / `mute` / `stop` /
+  `quit`). **Tkinter is only ever touched on the main thread** — `App._pump()`
+  drains `ui_q` on an `after()` timer. Typing (or Mute) while she's listening
+  works because `Ears.listen()` now takes `should_stop` (polled ~5×/s — the
+  worker passes "is a command queued?") and `on_level` (per-chunk RMS, feeds
+  the meter); both are optional and default-off so `friday.py` is unaffected.
+  Porcupine always-on wake is **skipped** in the UI (needs the console loop);
+  filter-mode wake-word gating on *spoken* input still applies. Under
+  `pythonw.exe` there's no console and `sys.stdout` is `None`, so
+  `_install_logging()` tees stdout/stderr to `friday_ui.log` (gitignored).
+  `scripts/install-shortcut.ps1` drops a Desktop `.lnk` →
+  `.venv\Scripts\pythonw.exe friday_ui.py` with `assets/friday.ico`
+  (`-Console` targets `friday.py` instead, `-Uninstall` removes it).
 
 ## Persona
 
@@ -293,6 +321,8 @@ Everything below is committed and pushed to `origin/main`.
   model unload at 180 s (`FRIDAY_OLLAMA_IDLE_UNLOAD`).
 - Scheduler live; `schedule` in the CHAT tool set (now 11). `FRIDAY_HOME_CITY`
   unset — the morning briefing skips the weather line until it's set.
+- Desktop UI (`friday_ui.py`) built; a "F.R.I.D.A.Y." shortcut is on the
+  Desktop (→ `pythonw friday_ui.py`). Console `friday.py` still the default.
 - User set `OLLAMA_MAX_LOADED_MODELS=1` + `OLLAMA_IGPU_ENABLE=true` +
   `OLLAMA_LLM_LIBRARY=vulkan` in Ollama's own env.
 
@@ -329,11 +359,23 @@ scipy / scikit-learn / openWakeWord are off the table.
 - Scheduler + morning briefing — **done** (`tools/schedule.py`, see the
   architecture note). `schedule` tool for recurring jobs;
   `task="briefing"` speaks the morning rundown on the first turn after it's
-  due. Set `FRIDAY_HOME_CITY` for the weather line. That clears the roadmap —
-  remaining open threads are the mic loop and the parked Azure provider.
+  due. Set `FRIDAY_HOME_CITY` for the weather line.
+- **Attention detection** — not started. The original OpenJarvis-review
+  roadmap item (5): after FRIDAY answers, stay "awake" for a follow-up
+  without re-triggering the wake word (a short listening window, or gaze/face
+  presence). Would sit in `friday/wake.py` / the `friday.py` loop.
+- **"Live mode" (Gemini Live / realtime)** — not started. Roadmap item (7):
+  an optional low-latency full-duplex path (barge-in, streaming STT+TTS)
+  using a realtime API, as an alternative to the current turn-by-turn loop.
+  Big; only worth it once a paid key or capable local realtime stack exists.
+- **Desktop UI + shortcut** — **done** (`friday_ui.py`, see the "Desktop UI"
+  architecture note). Tkinter control panel; `scripts/install-shortcut.ps1`
+  put a Desktop `.lnk` on this machine (2026-09-09).
+
+Remaining non-feature threads: the mic loop and the parked Azure provider.
 
 **Running for a smoke test without a mic**: `python test_brain.py` (type at
 it), or the no-model tests (`test_router` / `test_memory` / `test_text` /
-`test_wake` / `test_confirm` / `test_schedule`). Booting `friday.py` here always ends at "heard nothing" — the
+`test_wake` / `test_confirm` / `test_schedule` / `test_ui`). Booting `friday.py` here always ends at "heard nothing" — the
 agent has no mic. Kill leftover runs with
 `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? { $_.CommandLine -match 'friday' } | % { Stop-Process $_.ProcessId -Force }`.

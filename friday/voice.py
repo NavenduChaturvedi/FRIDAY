@@ -44,7 +44,7 @@ class Ears:
         )
 
     # -- recording ------------------------------------------------------
-    def _record(self, path: str) -> str | None:
+    def _record(self, path: str, on_level=None, should_stop=None) -> str | None:
         cfg = self._cfg
         audio_q: queue.Queue[np.ndarray] = queue.Queue()
 
@@ -69,6 +69,10 @@ class Ears:
 
         with stream:
             while True:
+                # A caller (the UI) can pull us out early — e.g. the user
+                # typed a message instead of speaking, or muted the mic.
+                if should_stop is not None and should_stop():
+                    return None
                 if time.monotonic() - capture_start > cfg.max_recording_seconds:
                     if has_spoken:
                         print("⏱️  max length reached.")
@@ -84,6 +88,8 @@ class Ears:
 
                 frames.append(data)
                 rms = float(np.sqrt(np.mean(data**2)))
+                if on_level is not None:
+                    on_level(rms)
 
                 if rms > cfg.silence_threshold:
                     if not has_spoken:
@@ -117,8 +123,14 @@ class Ears:
         return path
 
     # -- transcription -------------------------------------------------
-    def listen(self) -> str | None:
-        path = self._record(_INPUT_WAV)
+    def listen(self, on_level=None, should_stop=None) -> str | None:
+        """Record a phrase and transcribe it.
+
+        ``on_level(rms)`` is called for each audio chunk while recording (for a
+        UI meter); ``should_stop()`` is polled ~5x/second and, if it returns
+        true, recording aborts and ``listen`` returns ``None``.
+        """
+        path = self._record(_INPUT_WAV, on_level, should_stop)
         if not path or Path(path).stat().st_size < 1024:
             return None
 

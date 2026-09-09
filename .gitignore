@@ -18,3 +18,6 @@ test_voice.wav
 
 # Tool state (notes, reminders)
 state/
+
+# Desktop UI debug log (tee of stdout/stderr under pythonw)
+friday_ui.log
