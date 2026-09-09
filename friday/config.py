@@ -103,6 +103,13 @@ class Config:
     ollama_keep_alive: str = field(
         default_factory=lambda: _env_str("FRIDAY_OLLAMA_KEEP_ALIVE", "10m")
     )
+    # Seconds of conversational quiet after which FRIDAY proactively unloads
+    # every model it routes to, handing a memory-tight laptop back its ~5 GB
+    # while nobody's talking to her. The next turn pays a cold load. Tighter
+    # than keep_alive on purpose — that's Ollama's own backstop. 0 = off.
+    ollama_idle_unload: float = field(
+        default_factory=lambda: _env_float("FRIDAY_OLLAMA_IDLE_UNLOAD", 180.0)
+    )
 
     def gemini_model_for(self, route: str) -> str:
         heavy = self.gemini_model_heavy or self.gemini_model

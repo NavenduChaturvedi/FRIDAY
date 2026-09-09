@@ -19,6 +19,7 @@ thinking. Everything is configured from the environment / ``.env`` — see
 from __future__ import annotations
 
 import sys
+import threading
 
 
 # Windows consoles often default to cp1252; the status lines below use emoji
@@ -67,41 +68,71 @@ def run() -> int:
         hint = "Responding to everything."
     print(f"\nOnline. {hint}\n")
 
-    while True:
-        # Anything a tool queued (a timer going off) gets spoken first.
-        for note in toolbox.drain_notifications():
-            print(f"🔔 {note}")
-            mouth.say(clean_text_for_speech(note))
-        mouth.wait()
+    # Memory headroom: once the conversation has been quiet for a while, unload
+    # the routed Ollama model so its ~5 GB is free while nobody's talking to
+    # her. The next turn pays a cold load. A daemon Timer does the waiting; it's
+    # cancelled the moment a real turn starts. 0 = off (rely on keep_alive).
+    idle_unload = cfg.ollama_idle_unload
+    idle_timer: threading.Timer | None = None
 
-        wake.wait()  # blocks until the wake word in Porcupine mode; else instant
-        heard = ears.listen()
-        if not heard:
-            continue
+    def cancel_idle() -> None:
+        nonlocal idle_timer
+        if idle_timer is not None:
+            idle_timer.cancel()
+            idle_timer = None
 
-        if any(phrase in heard.lower() for phrase in cfg.exit_phrases):
-            mouth.say("Powering down. Catch you later.")
+    def arm_idle() -> None:
+        nonlocal idle_timer
+        if idle_unload <= 0:
+            return
+        cancel_idle()
+        idle_timer = threading.Timer(idle_unload, brain.release)
+        idle_timer.daemon = True
+        idle_timer.start()
+
+    try:
+        while True:
+            # Anything a tool queued (a timer going off) gets spoken first.
+            for note in toolbox.drain_notifications():
+                print(f"🔔 {note}")
+                mouth.say(clean_text_for_speech(note))
             mouth.wait()
-            print("👋 done.")
-            return 0
 
-        if not wake.addressed(heard):
-            print(f"   (not for me: {heard!r})")
-            continue
-        user_text = wake.strip(heard)
+            wake.wait()  # blocks until the wake word in Porcupine mode; else instant
+            heard = ears.listen()
+            if not heard:
+                continue
 
-        print(f"👤 {user_text}")
+            cancel_idle()  # a real turn is starting — keep the model warm
 
-        # Speak each sentence as the brain produces it.
-        try:
-            for sentence in brain.stream_reply(user_text):
-                print(f"🤖 {sentence}")
-                mouth.say(sentence)
-        except BrainError as exc:
-            print(f"⚠️  brain error: {exc}", file=sys.stderr)
-            mouth.say("I lost my train of thought there. Say that again?")
+            if any(phrase in heard.lower() for phrase in cfg.exit_phrases):
+                mouth.say("Powering down. Catch you later.")
+                mouth.wait()
+                print("👋 done.")
+                return 0
 
-        mouth.wait()  # let her finish before we start listening again
+            if not wake.addressed(heard):
+                print(f"   (not for me: {heard!r})")
+                arm_idle()
+                continue
+            user_text = wake.strip(heard)
+
+            print(f"👤 {user_text}")
+
+            # Speak each sentence as the brain produces it.
+            try:
+                for sentence in brain.stream_reply(user_text):
+                    print(f"🤖 {sentence}")
+                    mouth.say(sentence)
+            except BrainError as exc:
+                print(f"⚠️  brain error: {exc}", file=sys.stderr)
+                mouth.say("I lost my train of thought there. Say that again?")
+
+            mouth.wait()  # let her finish before we start listening again
+            arm_idle()
+    finally:
+        cancel_idle()
+        brain.release()  # free the model on the way out (goodbye / Ctrl+C)
 
 
 def main() -> int:

@@ -229,19 +229,34 @@ class OllamaProvider(Provider):
             {"type": "function", "function": d} for d in toolbox.declarations()
         ]
 
-    def _make_room_for(self, model: str) -> None:
-        """Unload the other models FRIDAY routes to, so at most one is resident.
-        Never touches a model the user is running themselves."""
+    def _loaded_managed(self) -> set[str]:
+        """The models FRIDAY routes to that are currently resident in Ollama."""
         try:
             loaded = {m.model for m in self._client.ps().models}
         except Exception:  # noqa: BLE001
-            return
-        for other in (loaded & self._managed) - {model}:
+            return set()
+        return loaded & self._managed
+
+    def _unload(self, models: set[str], reason: str) -> None:
+        """Best-effort: tell Ollama to drop each model from RAM now."""
+        for model in models:
             try:
-                self._client.generate(model=other, keep_alive=0)
-                print(f"  brain: unloaded ollama/{other} to free memory")
+                self._client.generate(model=model, keep_alive=0)
+                print(f"  brain: unloaded ollama/{model} ({reason})")
             except Exception:  # noqa: BLE001
                 pass
+
+    def _make_room_for(self, model: str) -> None:
+        """Unload the other models FRIDAY routes to, so at most one is resident.
+        Never touches a model the user is running themselves."""
+        self._unload(self._loaded_managed() - {model}, "freeing memory")
+
+    def release(self) -> None:
+        """Unload every model FRIDAY routes to. Called when the conversation
+        goes idle and at shutdown — the next turn pays a cold load, but a
+        memory-tight laptop gets its RAM back in the meantime. A model the
+        user loaded themselves is left alone."""
+        self._unload(self._loaded_managed(), "idle")
 
     def _chat_stream(self, model: str, messages: list[dict], tools):
         return self._client.chat(
@@ -494,6 +509,20 @@ class Brain:
         if not names or [n.lower() for n in names] == ["all"]:
             return self._toolbox
         return self._toolbox.subset(names)
+
+    def release(self) -> None:
+        """Ask each provider to free what it can hold between turns — Ollama
+        unloads its routed models. Safe to call any time; a no-op for a
+        provider (Gemini) that keeps nothing resident."""
+        for provider in self._providers:
+            free = getattr(provider, "release", None)
+            if free is None:
+                continue
+            try:
+                free()
+            except Exception as exc:  # noqa: BLE001
+                print(f"  brain: {provider.name} release failed ({exc})",
+                      file=sys.stderr)
 
     def reset(self) -> None:
         self._history.clear()

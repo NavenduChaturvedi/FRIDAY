@@ -130,6 +130,16 @@ Ollama must be running (`ollama serve`) with at least one of the models in
   (default 3) it lets models stack and a 25 GB box hits 99% memory → disk
   paging → Vulkan iGPU thrash. `FRIDAY_OLLAMA_KEEP_ALIVE` (10m) keeps the model
   warm between turns.
+- **Idle unload (`Brain.release()` + `friday.py`).** After a turn `friday.py`
+  arms a daemon `threading.Timer`; if the conversation stays quiet for
+  `FRIDAY_OLLAMA_IDLE_UNLOAD` seconds (180 default, 0 = off) it calls
+  `Brain.release()` → `OllamaProvider.release()`, which `generate(keep_alive=0)`s
+  every *managed* model still resident — so walking away from her hands the
+  laptop back ~5 GB. The timer is cancelled the instant a real turn starts; the
+  next turn just pays a cold load. The same `release()` runs in the loop's
+  `finally`, so "goodbye Friday" / Ctrl+C frees the model too (no more manual
+  `ollama stop`). Gemini has no `release()`; the `getattr` skips it. This is
+  tighter than `keep_alive`, which stays as Ollama's own backstop.
 - **History is a `deque(maxlen=history_turns*2)`** of `Turn(role, content)`,
   in memory only, cleared on restart or `Brain.reset()`.
 - **Persistent memory (`friday/memory.py`).** `state/memory.json`, categorised
@@ -261,8 +271,11 @@ scipy / scikit-learn / openWakeWord are off the table.
   RMS meter would help.
 - **Memory is tight.** 23 GB box + a heavy IDE/browser desktop (~13–14 GB
   baseline) + llama3.1:8b (~5.5 GB via `llama-server`) + the app leaves
-  almost nothing free. `ollama stop llama3.1:8b` frees it between sessions.
-  A smaller chat model or a "release the model on idle" hook may be needed.
+  almost nothing free. *Partly addressed:* `FRIDAY_OLLAMA_IDLE_UNLOAD` (180s)
+  now unloads the model after a conversational lull and on shutdown (see the
+  "Idle unload" architecture note), so idle time and closed sessions cost 0 GB.
+  Active use still needs the ~5.5 GB — a smaller chat model is the next lever
+  if that's still too much while she's in use.
 - **Azure OpenAI provider is parked** — built (`AzureProvider`, gpt-4.1-mini)
   then reverted in `776b69d` because the Azure portal wouldn't cooperate.
   `git revert 776b69d` restores it; then add `AZURE_OPENAI_API_KEY` +

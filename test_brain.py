@@ -53,3 +53,5 @@ while True:
             f"        [first sentence {first:.1f}s, "
             f"done {time.monotonic() - started:.1f}s]\n"
         )
+
+brain.release()  # don't leave ~5 GB of model pinned after the test
